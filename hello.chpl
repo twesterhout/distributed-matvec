@@ -1,4 +1,5 @@
 import Random;
+use CPtr;
 use LinearAlgebra;
 use BlockDist, ReplicatedDist;
 use CommDiagnostics;
@@ -6,18 +7,28 @@ use CommDiagnostics;
 config const n = 4;
 config const p = 0.6;
 
+extern proc plugin_init(arg:uint(32));
+extern proc plugin_deinit();
+extern proc plugin_get_dimension():uint(64);
+extern proc plugin_get_max_nonzero_per_row():uint(64);
+extern proc plugin_get_basis_states(): c_ptr(uint(64));
+
+
+/* This class will be swapped by external C functions in the future.
+ */
 record CSR {
   var numberNonZero: int;
   var dimension: int;
-  var elements: [{0..<numberNonZero} dmapped Replicated()] real;
-  var columnIndices: [{0..<numberNonZero} dmapped Replicated()] int;
-  var rowIndices: [{0..dimension} dmapped Replicated()] int;
+  var elements: [{0..<numberNonZero}] real; // [{0..<numberNonZero} dmapped Replicated()] real;
+  var columnIndices: [{0..<numberNonZero}] int; // [{0..<numberNonZero} dmapped Replicated()] int;
+  var rowIndices: [{0..dimension}] int; // [{0..dimension} dmapped Replicated()] int;
 
   proc init(elements, columnIndices, rowIndices) {
     this.numberNonZero = elements.size;
     this.dimension = rowIndices.size - 1;
     this.complete();
-    for L in Locales do on L {
+    // for L in Locales do on L {
+    on Locales[0] {
       this.elements = elements;
       this.columnIndices = columnIndices;
       this.rowIndices = rowIndices;
@@ -25,6 +36,10 @@ record CSR {
   }
 }
 
+/* For testing purposes only, converts dense matrices to CSR format.
+
+   NOTE: why is it crazy slow?
+ */
 proc dense2csr(A: [?D] real) {
   writeln("Building CSR...");
   var dimension = D.dim(0).size;
@@ -98,7 +113,24 @@ proc matvec(H: CSR, x: [?D1] real, y: [?D2] real) {
   // }
 }
 
+plugin_init(n:uint(32));
+var dim = plugin_get_dimension():int;
+writeln("Dimension: ", dim);
+writeln("Max non-zero per row: ", plugin_get_max_nonzero_per_row());
 
+proc makeStates() {
+  var _p: c_ptr(uint(64)) = plugin_get_basis_states();
+  var _states = makeArrayFromPtr(_p, dim:uint);
+  var states: [{0..<dim} dmapped Block(boundingBox={0..<dim})] uint(64) = _states;
+  return states;
+}
+
+var states = makeStates();
+writeln(states);
+
+plugin_deinit();
+
+/*
 const D1 = {0..<n};
 const D2 = {0..<n, 0..<n};
 var x: [D1 dmapped Block(boundingBox=D1)] real;
@@ -132,11 +164,4 @@ for L in Locales {
     writeln("On locale ", here.id, " elements=", implicit.elements); // .replicand(L));
   }
 }
-
-
-
-
-
-
-
-
+*/
