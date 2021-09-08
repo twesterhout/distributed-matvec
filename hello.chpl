@@ -7,11 +7,12 @@ use CommDiagnostics;
 config const n = 4;
 config const p = 0.6;
 
-extern proc plugin_init(arg:uint(32));
+extern proc plugin_init(n:uint(32));
 extern proc plugin_deinit();
 extern proc plugin_get_dimension():uint(64);
 extern proc plugin_get_max_nonzero_per_row():uint(64);
 extern proc plugin_get_basis_states(): c_ptr(uint(64));
+extern proc plugin_apply_operator(spin:uint(64), other_spins:c_ptr(uint(64)), other_coeffs:c_ptr(complex(128))): uint(64);
 
 
 /* This class will be swapped by external C functions in the future.
@@ -127,6 +128,18 @@ proc makeStates() {
 
 var states = makeStates();
 writeln(states);
+
+var otherStatesBuffer: [{0..<plugin_get_max_nonzero_per_row()}] uint(64);
+var otherCoeffsBuffer: [{0..<plugin_get_max_nonzero_per_row()}] complex(128);
+var written: uint(64);
+var status: int(32);
+
+for x in states {
+  written = plugin_apply_operator(x, c_ptrTo(otherStatesBuffer[0]), c_ptrTo(otherCoeffsBuffer[0]));
+  writeln(written);
+  writeln(otherStatesBuffer[0..<written]);
+  writeln(otherCoeffsBuffer[0..<written]);
+}
 
 plugin_deinit();
 

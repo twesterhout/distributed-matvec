@@ -4,6 +4,7 @@
 #include <complex.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct plugin_state_type {
   ls_spin_basis *basis;
@@ -117,4 +118,34 @@ uint64_t const *plugin_get_basis_states() {
   uint64_t const *p = ls_states_get_data(states);
   ls_destroy_states(states);
   return p;
+}
+
+typedef struct plugin_apply_callback_state_type {
+  uint64_t *spins;
+  _Complex double *coeffs;
+  uint64_t size;
+} plugin_apply_callback_state_type;
+
+static ls_error_code plugin_apply_callback(ls_bits512 const *bits,
+                                           void const *coeff, void *cxt) {
+  plugin_apply_callback_state_type *state = cxt;
+  state->spins[state->size] = bits->words[0];
+  state->coeffs[state->size] = *((_Complex double const *)coeff);
+  ++(state->size);
+  return LS_SUCCESS;
+}
+
+uint64_t plugin_apply_operator(uint64_t const bits, uint64_t *other_spins,
+                               _Complex double *other_coeffs) {
+  ls_bits512 spin;
+  memset(&spin, 0, sizeof(ls_bits512));
+  spin.words[0] = bits;
+
+  plugin_apply_callback_state_type state = {other_spins, other_coeffs, 0};
+  ls_error_code status = ls_operator_apply(plugin_state.matrix, &spin,
+                                           plugin_apply_callback, &state);
+  if (status != LS_SUCCESS) {
+    print_error_message_and_exit(status);
+  }
+  return state.size;
 }
