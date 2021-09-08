@@ -42,6 +42,9 @@ proc apply(basis: [] uint(64), x: [] real, y: [?D] real) {
       var acc: complex(128);
       for _k in {0..<written} {
         var j: int;
+        // TODO: officially one can only call get_index on the corresponding
+        // Locale. In other words, we will need another function "get_locale"
+        // which will be called before get_index.
         j = plugin_get_index(statesBuffer[_k]):int;
         acc += coeffsBuffer[_k] * x[j];
       }
