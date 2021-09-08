@@ -149,3 +149,22 @@ uint64_t plugin_apply_operator(uint64_t const bits, uint64_t *other_spins,
   }
   return state.size;
 }
+
+uint64_t plugin_get_index(uint64_t const bits) {
+  uint64_t index;
+  ls_error_code status = ls_get_index(plugin_state.basis, bits, &index);
+  if (status != LS_SUCCESS) {
+    print_error_message_and_exit(status);
+  }
+  return index;
+}
+
+void plugin_matvec(double const *x, double *y) {
+  uint64_t size;
+  ls_get_number_states(plugin_state.basis, &size);
+  ls_error_code status =
+      ls_operator_matmat(plugin_state.matrix, LS_FLOAT64, size, 1, x, 1, y, 1);
+  if (status != LS_SUCCESS) {
+    print_error_message_and_exit(status);
+  }
+}
