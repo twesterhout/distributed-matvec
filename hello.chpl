@@ -27,9 +27,26 @@ proc makeStates() {
   return states;
 }
 
+proc makeIndexMap(states: [?D] uint(64)) {
+  var ranges: [{0..<numLocales}] (uint(64), uint(64));
+  coforall L in Locales do on L {
+    var indices = D.localSubdomain().dim(0);
+    ranges[L.id] = (states[indices.first], states[indices.last]);
+  }
+  return ranges;
+}
+
+proc getLocale(ranges: [] (uint(64), uint(64)), spin: uint(64)) {
+  for (i, (l, u)) in zip(0.., ranges) {
+    if (l <= spin && spin <= u) { return i; }
+  }
+  assert(false);
+  return -1;
+}
+
 // The actual matrix-vector product y <- Ax where A comes from libplugin.
 // basis is a list of basis vectors constructed using makeStates.
-proc apply(basis: [] uint(64), x: [] real, y: [?D] real) {
+proc apply(basis, ranges, x: [] real, y: [?D] real) {
   coforall L in Locales do on L {
     var dim = plugin_get_max_nonzero_per_row();
     var statesBuffer: [{0..<dim}] uint(64);
@@ -37,16 +54,16 @@ proc apply(basis: [] uint(64), x: [] real, y: [?D] real) {
 
     for i in D.localSubdomain() {
       var currentSpin = basis[i];
-      var written: uint;
-      written = plugin_apply_operator(currentSpin, c_ptrTo(statesBuffer[0]), c_ptrTo(coeffsBuffer[0]));
+      var written = plugin_apply_operator(currentSpin, c_ptrTo(statesBuffer[0]), c_ptrTo(coeffsBuffer[0]));
       var acc: complex(128);
       for _k in {0..<written} {
-        var j: int;
-        // TODO: officially one can only call get_index on the corresponding
-        // Locale. In other words, we will need another function "get_locale"
-        // which will be called before get_index.
-        j = plugin_get_index(statesBuffer[_k]):int;
-        acc += coeffsBuffer[_k] * x[j];
+        var localeIndex = getLocale(ranges, statesBuffer[_k]);
+        var xj: complex(128);
+        on Locales[localeIndex] {
+          var j = plugin_get_index(statesBuffer[_k]):int;
+          xj = x[j];
+        }
+        acc += coeffsBuffer[_k] * xj;
       }
       assert(acc.im == 0);
       y[i] = acc.re;
@@ -62,6 +79,8 @@ coforall L in Locales do on L {
 var states = makeStates();
 writeln("Basis states: ", states);
 writeln("Max non-zero per row: ", plugin_get_max_nonzero_per_row());
+
+var ranges = makeIndexMap(states);
 
 // Construct x and y arrays. x1 and y1 are used by Chapel code and x2 and y2
 // are used by libplugin. y1 should afterwards equal y2.
@@ -81,7 +100,7 @@ writeln(x2);
 writeln(y2);
 
 // Perform y <- Ax in Chapel
-apply(states, x1, y1);
+apply(states, ranges, x1, y1);
 writeln(x1);
 writeln(y1);
 
