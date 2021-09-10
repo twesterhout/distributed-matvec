@@ -12,3 +12,9 @@ uint64_t plugin_apply_operator(uint64_t bits, uint64_t *other_spins,
                                _Complex double *other_coeffs);
 uint64_t plugin_get_index(uint64_t bits);
 void plugin_matvec(double const *x, double *y);
+
+unsigned plugin_get_number_spins();
+int plugin_get_hamming_weight();
+int plugin_get_spin_inversion();
+int plugin_is_representative(uint64_t count, uint64_t const spins[],
+                             uint8_t output[]);

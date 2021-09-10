@@ -99,6 +99,23 @@ void plugin_deinit() {
   ls_destroy_operator(plugin_state.matrix);
 }
 
+unsigned plugin_get_number_spins() {
+  return ls_get_number_spins(plugin_state.basis);
+}
+
+int plugin_get_hamming_weight() {
+  return ls_get_hamming_weight(plugin_state.basis);
+}
+
+int plugin_get_spin_inversion() {
+  return ls_get_spin_inversion(plugin_state.basis);
+}
+
+int plugin_is_representative(uint64_t const count, uint64_t const spins[],
+                             uint8_t output[]) {
+  return ls_is_representative(plugin_state.basis, count, spins, output);
+}
+
 uint64_t plugin_get_dimension() {
   uint64_t dim;
   ls_error_code status = ls_get_number_states(plugin_state.basis, &dim);
