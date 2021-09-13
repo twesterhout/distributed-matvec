@@ -34,6 +34,35 @@ proc nextStateGeneral(v: uint(64)): uint(64) {
   return v + 1;
 }
 
+proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64), isHammingWeightFixed: bool): int {
+  assert(v <= bound);
+  for i in buffer.domain {
+    buffer[i] = v;
+    if (v == bound) { return i + 1; }
+    v = if isHammingWeightFixed then nextStateFixedHamming(v) else nextStateGeneral(v);
+  }
+  return buffer.size;
+}
+
+config const isRepresentativeBatchSize = 1;
+
+iter findStatesInRange(in lower: uint(64), upper: uint(64)) {
+	var isHammingWeightFixed = plugin_get_hamming_weight() != -1;
+  var chunkSize = isRepresentativeBatchSize;
+
+  var buffer: [0..<chunkSize] uint(64);
+  var flags: [0..<chunkSize] uint(8);
+  while (true) {
+    var written = manyNextState(lower, upper, buffer, isHammingWeightFixed);
+    plugin_is_representative(written:uint, c_ptrTo(buffer), c_ptrTo(flags));
+    for i in {0..<written} {
+      if (flags[i]:bool) { yield buffer[i]; }
+    }
+    if (buffer[written - 1] == upper) { break; }
+    lower = if isHammingWeightFixed then nextStateFixedHamming(lower) else nextStateGeneral(lower);
+  }
+}
+
 proc findRepresentativesInRange(lower: uint(64), upper: uint(64)) {
   var m = plugin_get_hamming_weight();
   if (m != -1) {
@@ -103,9 +132,8 @@ proc splitIntoTasks(in current: uint(64), bound: uint(64), chunkSize: uint(64)) 
           ranges.append((current, bound));
           break;
       }
-      var next: uint(64);
-      if (isHammingWeightFixed) { next = closestWithFixedHamming(current + chunkSize, hammingWeight); }
-      else { next = current + chunkSize; }
+      var next = current + chunkSize;
+      if isHammingWeightFixed { next = closestWithFixedHamming(next, hammingWeight); }
 
       assert(next >= current);
       if (next >= bound) {
@@ -113,8 +141,7 @@ proc splitIntoTasks(in current: uint(64), bound: uint(64), chunkSize: uint(64)) 
           break;
       }
       ranges.append((current, next));
-      if (isHammingWeightFixed) { current = nextStateFixedHamming(next); }
-      else { current = nextStateGeneral(next); }
+      current = if isHammingWeightFixed then nextStateFixedHamming(next) else nextStateGeneral(next);
   }
 
   var distRanges = newCyclicArr({0..<ranges.size}, (uint(64), uint(64)));
@@ -154,10 +181,34 @@ proc makeStatesChapel() {
   var chunkSize = max((upper - lower) / 1000, 1);
   writeln("Using chunkSize=", chunkSize, "...");
   var ranges = splitIntoTasks(lower, upper, chunkSize);
+  var chunks: [{0..<ranges.size} dmapped Cyclic(startIdx=0)] [LocaleSpace] list(uint(64));
 
-  var states: [LocaleSpace dmapped Block(LocaleSpace)] list(uint(64));
+  forall ((lower, upper), chunk) in zip(ranges, chunks) {
+    for x in findStatesInRange(lower, upper) {
+      var hash = (hash64_01(x) % numLocales:uint):int;
+      chunk[hash].append(x);
+    }
+  }
+
+  var counts: [LocaleSpace dmapped Block(LocaleSpace)] int;
   coforall loc in Locales do on loc {
-    states[loc.id] = processLocalTasks(ranges);
+    // NOTE: can this be done with a simple reduction?
+    var c: int = 0;
+    for i in {0..<ranges.size} {
+      c += chunks[i][loc.id].size;
+    }
+    counts[loc.id] = c;
+  }
+  var maxCount = max reduce counts;
+
+  var states: [LocaleSpace dmapped Block(LocaleSpace)] [0..<maxCount] uint(64);
+  coforall loc in Locales do on loc {
+    var offset: int = 0;
+    for i in {0..<ranges.size} {
+      var c = chunks[i][loc.id].size;
+      states[loc.id][offset..<offset + c] = chunks[i][loc.id];
+      offset += c;
+    }
   }
   return states;
 }
@@ -372,11 +423,13 @@ proc testStates() {
   // writeln(makeStates());
 
   var states = makeStatesChapel();
-  var buckets = shuffleWithHash(states);
-  for i in LocaleSpace {
-    writeln(buckets[i]);
-  }
-
+	for i in states.domain {
+		writeln(states[i]);
+	}	
+  // var buckets = shuffleWithHash(states);
+  // for i in LocaleSpace {
+  //   writeln(buckets[i]);
+  // }
 
   coforall L in Locales do on L { plugin_deinit(); }
 }
