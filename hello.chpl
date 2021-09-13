@@ -80,7 +80,7 @@ proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
       // if (x < max_value) { x = next_state<true>(x); }
   }
   else if (weight < hammingWeight) {
-      // Keep setting lowest bits until we reach the desired Hamming weight.
+    // Keep setting lowest bits until we reach the desired Hamming weight.
     var i = 0;
     while (weight < hammingWeight) {
       assert(i < 64);
@@ -122,7 +122,7 @@ proc splitIntoTasks(in current: uint(64), bound: uint(64), chunkSize: uint(64)) 
   return distRanges;
 }
 
-proc processTasks(ranges: [] (uint(64), uint(64))) {
+proc processLocalTasks(ranges: [] (uint(64), uint(64))) {
   var states: [0..<ranges.localSubdomain().size] list(uint(64));
   coforall (i, _k) in zip(0.., ranges.localSubdomain()) {
     var (lower, upper) = ranges[_k];
@@ -157,9 +157,28 @@ proc makeStatesChapel() {
 
   var states: [LocaleSpace dmapped Block(LocaleSpace)] list(uint(64));
   coforall loc in Locales do on loc {
-    states[loc.id] = processTasks(ranges);
+    states[loc.id] = processLocalTasks(ranges);
   }
   return states;
+}
+
+proc merge(xs, ys) {
+
+}
+
+proc shuffleWithHash(states: [] list(uint(64))) {
+  var buckets: [LocaleSpace dmapped Block(LocaleSpace)] [LocaleSpace] list(uint(64));
+  forall xs in states {
+    for x in xs {
+      var hash = (hash64_01(x) % numLocales:uint):int;
+      buckets[xs.locale.id][hash].append(x);
+    }
+  }
+  // At this point states array should be deallocated to free RAM.
+  // Is there a way to force this in Chapel?
+
+
+  return buckets;
 }
 
 
@@ -350,9 +369,13 @@ proc testStates() {
   // var upper = lower << (k - m);
   // var states = findRepresentativesInRange(lower, upper);
   // writeln(states);
-  writeln(makeStates());
+  // writeln(makeStates());
 
-  writeln(makeStatesChapel());
+  var states = makeStatesChapel();
+  var buckets = shuffleWithHash(states);
+  for i in LocaleSpace {
+    writeln(buckets[i]);
+  }
 
 
   coforall L in Locales do on L { plugin_deinit(); }
