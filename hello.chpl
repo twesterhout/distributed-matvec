@@ -4,6 +4,7 @@ use List;
 use CPtr;
 use SysCTypes;
 use BlockDist;
+use CyclicDist;
 use CommDiagnostics;
 
 config const n = 4;
@@ -56,6 +57,111 @@ proc findRepresentativesInRange(lower: uint(64), upper: uint(64)) {
   return representatives;
 }
 
+proc testBit(bits: uint(64), i: int): bool { return ((bits >> i) & 1):bool; }
+proc clearBit(bits: uint(64), i: int) { return bits & ~(1:uint(64) << i); }
+proc setBit(bits: uint(64), i: int) { return bits | (1:uint(64) << i); }
+
+proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
+  assert(hammingWeight <= 64);
+  var weight = popcount(x);
+  if (weight > hammingWeight) {
+      // Keep clearing lowest bits until we reach the desired Hamming weight.
+      var i = 0;
+      while (weight > hammingWeight) {
+        assert(i < 64);
+        if (testBit(x, i)) {
+            x = clearBit(x, i);
+            weight -= 1;
+        }
+        i += 1;
+      }
+      // NOTE: why??
+      // var maxValue = hammingWeight == 0 ? (0:uint(64)) : (~(0:uint(64)) << (64 - hammingWeight));
+      // if (x < max_value) { x = next_state<true>(x); }
+  }
+  else if (weight < hammingWeight) {
+      // Keep setting lowest bits until we reach the desired Hamming weight.
+    var i = 0;
+    while (weight < hammingWeight) {
+      assert(i < 64);
+      if (!testBit(x, i)) {
+          x = setBit(x, i);
+          weight += 1;
+      }
+      i += 1;
+    }
+  }
+  return x;
+}
+
+proc splitIntoTasks(in current: uint(64), bound: uint(64), chunkSize: uint(64)) {
+  var ranges: list((uint(64), uint(64)));
+  var isHammingWeightFixed = plugin_get_hamming_weight() != -1;
+  var hammingWeight = popcount(current);
+  while (true) {
+      if (bound - current <= chunkSize) {
+          ranges.append((current, bound));
+          break;
+      }
+      var next: uint(64);
+      if (isHammingWeightFixed) { next = closestWithFixedHamming(current + chunkSize, hammingWeight); }
+      else { next = current + chunkSize; }
+
+      assert(next >= current);
+      if (next >= bound) {
+          ranges.append((current, bound));
+          break;
+      }
+      ranges.append((current, next));
+      if (isHammingWeightFixed) { current = nextStateFixedHamming(next); }
+      else { current = nextStateGeneral(next); }
+  }
+
+  var distRanges = newCyclicArr({0..<ranges.size}, (uint(64), uint(64)));
+  distRanges = ranges;
+  return distRanges;
+}
+
+proc processTasks(ranges: [] (uint(64), uint(64))) {
+  var states: [0..<ranges.localSubdomain().size] list(uint(64));
+  coforall (i, _k) in zip(0.., ranges.localSubdomain()) {
+    var (lower, upper) = ranges[_k];
+    states[i] = findRepresentativesInRange(lower, upper);
+  }
+  var combined: list(uint(64));
+  for part in states {
+    combined.extend(part);
+  }
+  return combined;
+}
+
+proc makeStatesChapel() {
+  var numberSpins = plugin_get_number_spins();
+  var hammingWeight = plugin_get_hamming_weight();
+  var isFixedHammingWeight = hammingWeight != -1;
+  var lower: uint(64);
+  var upper: uint(64);
+  if (isFixedHammingWeight) {
+    lower = ~(0:uint(64)) >> (64 - hammingWeight);
+    upper = lower << (numberSpins - hammingWeight);
+  }
+  else {
+    lower = 0;
+    if (numberSpins == 64) { upper = ~(0:uint(64)); }
+    else { upper = (1:uint(64) << numberSpins) - 1; }
+  }
+
+  var chunkSize = max((upper - lower) / 1000, 1);
+  writeln("Using chunkSize=", chunkSize, "...");
+  var ranges = splitIntoTasks(lower, upper, chunkSize);
+
+  var states: [LocaleSpace dmapped Block(LocaleSpace)] list(uint(64));
+  coforall loc in Locales do on loc {
+    states[loc.id] = processTasks(ranges);
+  }
+  return states;
+}
+
 
 // Creates a distributed array of basis states.
 //
@@ -66,14 +172,15 @@ proc makeStates() {
   var dim = plugin_get_dimension():int;
   var _p: c_ptr(uint(64)) = plugin_get_basis_states();
   var _states = makeArrayFromPtr(_p, dim:uint);
-  var states: [{0..<dim} dmapped Block(boundingBox={0..<dim})] uint(64) = _states;
+  const D = {0..<dim};
+  var states: [D dmapped Block(boundingBox={0..<dim})] uint(64) = _states;
   return states;
 }
 
 // 2^N --> binom(N, N/2)
 
 proc makeIndexMap(states: [?D] uint(64)) {
-  var ranges: [{0..<numLocales}] (uint(64), uint(64));
+  var ranges: LocaleSpace (uint(64), uint(64));
   coforall L in Locales do on L {
     var indices = D.localSubdomain().dim(0);
     ranges[L.id] = (states[indices.first], states[indices.last]);
@@ -237,14 +344,16 @@ proc testApply() {
 proc testStates() {
   coforall L in Locales do on L { plugin_init(n:uint(32)); }
 
-  var k = plugin_get_number_spins();
-  var m = plugin_get_hamming_weight();
-  var lower = 0xFFFFFFFFFFFFFFFF >> (64 - m);
-  var upper = lower << (k - m);
-  var states = findRepresentativesInRange(lower, upper);
-  writeln(states);
-
+  // var k = plugin_get_number_spins();
+  // var m = plugin_get_hamming_weight();
+  // var lower = 0xFFFFFFFFFFFFFFFF >> (64 - m);
+  // var upper = lower << (k - m);
+  // var states = findRepresentativesInRange(lower, upper);
+  // writeln(states);
   writeln(makeStates());
+
+  writeln(makeStatesChapel());
+
 
   coforall L in Locales do on L { plugin_deinit(); }
 }
