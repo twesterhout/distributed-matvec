@@ -180,15 +180,8 @@ proc makeStatesChapel() {
     }
   }
 
-  var counts: [LocaleSpace dmapped Block(LocaleSpace)] int;
-  coforall loc in Locales do on loc {
-    // NOTE: can this be done with a simple reduction?
-    var c: int = 0;
-    for i in {0..<ranges.size} {
-      c += chunks[i][loc.id].size;
-    }
-    counts[loc.id] = c;
-  }
+  var counts: [LocaleSpace dmapped Block(LocaleSpace)] int =
+    [j in LocaleSpace] (+ reduce [i in 0..<ranges.size] chunks[i][j].size);
   var maxCount = max reduce counts;
   writeln("Counts: ", counts); // For analyzing how uniform the distribution is.
 
