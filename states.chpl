@@ -53,13 +53,17 @@ proc nextStateGeneral(v: uint(64)): uint(64) {
 /* Fill buffer using either nextStateFixedHamming or nextStateGeneral. Returns
    the number of elements written.
  */
-proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64), isHammingWeightFixed: bool): int {
+proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64), nextStateFn) {// isHammingWeightFixed: bool): int {
   assert(v <= bound);
+  // var nextStateFn: func(uint(64), uint(64));
+  // if (isHammingWeightFixed) { nextStateFn = nextStateFixedHamming; }
+  // else { nextStateFn = nextStateGeneral; }
+
   for i in buffer.domain {
     buffer[i] = v;
     // If v == bound, incrementing v further is unsafe because it can overflow.
     if (v == bound) { return i + 1; }
-    v = if isHammingWeightFixed then nextStateFixedHamming(v) else nextStateGeneral(v);
+    v = nextStateFn(v); // if isHammingWeightFixed then nextStateFixedHamming(v) else nextStateGeneral(v);
   }
   return buffer.size;
 }
@@ -73,11 +77,15 @@ config const isRepresentativeBatchSize = 1;
 iter findStatesInRange(in lower: uint(64), upper: uint(64)) {
   const isHammingWeightFixed = plugin_get_hamming_weight() != -1;
   const chunkSize = isRepresentativeBatchSize;
+  var nextStateFn: func(uint(64), uint(64));
+  if (isHammingWeightFixed) { nextStateFn = nextStateFixedHamming; }
+  else { nextStateFn = nextStateGeneral; }
 
   var buffer: [0..<chunkSize] uint(64);
   var flags: [0..<chunkSize] uint(8);
   while (true) {
-    const written = manyNextState(lower, upper, buffer, isHammingWeightFixed);
+    const written = manyNextState(lower, upper, buffer, nextStateFn);
+      // manyNextState(lower, upper, buffer, isHammingWeightFixed);
     plugin_is_representative(written:uint, c_ptrTo(buffer), c_ptrTo(flags));
     for i in {0..<written} {
       if (flags[i]:bool) { yield buffer[i]; }
@@ -194,7 +202,7 @@ proc makeStatesChapel() {
       offset += c;
     }
   }
-  return states;
+  return (states, counts);
 }
 
 // Creates a distributed array of basis states.

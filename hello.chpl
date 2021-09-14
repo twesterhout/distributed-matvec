@@ -20,6 +20,47 @@ extern proc plugin_apply_operator(spin:uint(64), other_spins:c_ptr(uint(64)), ot
 extern proc plugin_get_index(spin:uint(64)): uint(64);
 extern proc plugin_matvec(x: c_ptr(real(64)), y: c_ptr(real(64)));
 
+extern proc ls_binary_search(data: c_ptr(uint(64)), size: uint(64), key: uint(64)): uint(64);
+
+record PerLocaleState {
+  var size: int;
+  var states: [0..<size] uint(64);
+  var x: [0..<size] real(64);
+  var y: [0..<size] real(64);
+
+  proc init(size: int) {
+    this.size = size;
+  }
+}
+
+proc apply(context: [] PerLocaleState) {
+  coforall L in Locales do on L {
+    const dim = plugin_get_max_nonzero_per_row();
+    var statesBuffer: [0..<dim] uint(64);
+    var coeffsBuffer: [0..<dim] complex(128);
+
+    //
+    // var x: int;
+    // forall i in 1..n with (in x) { ... }
+    forall (currentSpin, i) in zip(context[L.id].states, 0..) with (in statesBuffer, in coeffsBuffer) {
+      const written = plugin_apply_operator(currentSpin, c_ptrTo(statesBuffer[0]), c_ptrTo(coeffsBuffer[0]));
+      var acc: complex(128);
+      for _k in {0..<written} {
+        var localeIndex = (hash64_01(statesBuffer[_k]) % numLocales:uint):int;
+        var xj: complex(128);
+        on Locales[localeIndex] {
+          var j = ls_binary_search(c_ptrTo(context[localeIndex].states), context[localeIndex].size:uint, statesBuffer[_k]);
+          assert(j < context[localeIndex].size);
+          xj = context[localeIndex].x[j:int];
+        }
+        acc += coeffsBuffer[_k] * xj;
+      }
+      assert(acc.im == 0);
+      context[currentSpin.locale.id].y[i] = acc.re;
+    }
+  }
+}
+
 proc apply(basis: [] uint(64), ranges: [] (uint(64), uint(64)), x: [] real, y: [?D] real) {
   coforall L in Locales do on L {
     var dim = plugin_get_max_nonzero_per_row();
@@ -106,6 +147,35 @@ proc testApply() {
   }
 }
 
+proc checkStates(c_states: [] uint(64), chapel_states) {
+  var offsets: [LocaleSpace] int;
+  for s in c_states {
+    var localeIndex = (hash64_01(s) % numLocales:uint):int;
+    assert(chapel_states[localeIndex][offsets[localeIndex]] == s);
+    offsets[localeIndex] += 1;
+  }
+}
+
+proc initContext(c_x: [] real(64), c_states: [] uint(64), context: [] PerLocaleState) {
+  var offsets: [LocaleSpace] int;
+  for (x, s) in zip(c_x, c_states) {
+    var localeIndex = (hash64_01(s) % numLocales:uint):int;
+    assert(context[localeIndex].states[offsets[localeIndex]] == s);
+    context[localeIndex].x[offsets[localeIndex]] = x;
+    offsets[localeIndex] += 1;
+  }
+}
+
+proc checkResult(c_y: [] real(64), c_states: [] uint(64), context: [] PerLocaleState) {
+  var offsets: [LocaleSpace] int;
+  for (y, s) in zip(c_y, c_states) {
+    var localeIndex = (hash64_01(s) % numLocales:uint):int;
+    assert(context[localeIndex].y[offsets[localeIndex]] == y);
+    offsets[localeIndex] += 1;
+  }
+}
+
+
 proc testStates() {
   coforall L in Locales do on L { plugin_init(n:uint(32)); }
 
@@ -116,15 +186,36 @@ proc testStates() {
   // var states = findRepresentativesInRange(lower, upper);
   // writeln(states);
   // writeln(makeStates());
+  const dim = plugin_get_dimension():int;
+  var c_states = makeArrayFromPtr(plugin_get_basis_states(), dim:uint);
+  var c_x: [0..<dim] real;
+  var c_y: [0..<dim] real;
+  Random.fillRandom(c_x, 1235);
+  plugin_matvec(c_ptrTo(c_x), c_ptrTo(c_y));
+  writeln(c_y);
 
-  var states = makeStatesChapel();
-  for i in states.domain {
-    writeln(states[i]);
+
+  var (states, counts) = makeStatesChapel();
+  var x: [0..<4] real;
+  var y: [0..<4] real;
+
+  const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
+  var context: [OnePerLocale] PerLocaleState = [i in OnePerLocale] new PerLocaleState(counts[i]);
+  coforall loc in Locales do on loc {
+    context[loc.id].states = states[loc.id][0..<counts[loc.id]];
   }
+  initContext(c_x, c_states, context);
+
+  apply(context);
   // var buckets = shuffleWithHash(states);
   // for i in LocaleSpace {
   //   writeln(buckets[i]);
   // }
+  for i in LocaleSpace {
+    writeln(context[i].y);
+  }
+
+  checkResult(c_y, c_states, context);
 
   coforall L in Locales do on L { plugin_deinit(); }
 }
