@@ -5,32 +5,35 @@ use SysCTypes;
 use BlockDist;
 use CyclicDist;
 
-// Functions which we need to construct a list of "representatives" (i.e.
-// special binary configurations with which we're going to work)
-// extern proc plugin_get_number_spins(cxt: c_void_ptr): c_uint;
-// extern proc plugin_get_hamming_weight(cxt: c_void_ptr): c_int;
-// extern proc plugin_get_spin_inversion(cxt: c_void_ptr): c_int;
-// extern proc plugin_is_representative(
-//   cxt: c_void_ptr, count: uint(64), spins: c_ptr(uint(64)), output: c_ptr(uint(8))): c_int;
-
-// extern proc plugin_new_options_example_01(number_spins: c_uint): c_void_ptr;
-// extern proc plugin_delete_options_example_01(cxt: c_void_ptr);
-
-require "lattice_symmetries/lattice_symmetries.h";
-extern type ls_error_code;
+// NOTE: What we actually want is:
+// 
+// require "lattice_symmetries/lattice_symmetries.h";
+// extern type ls_flat_spin_basis;
+// extern type ls_error_code;
+//
+// but what we have to do for now is:
+require "dummy.h";
 extern type ls_flat_spin_basis;
+extern type ls_error_code = c_int;
 
 extern proc ls_flat_spin_basis_number_spins(basis: c_ptr(ls_flat_spin_basis)): c_uint;
 extern proc ls_flat_spin_basis_hamming_weight(basis: c_ptr(ls_flat_spin_basis)): c_int;
 extern proc ls_flat_spin_basis_spin_inversion(basis: c_ptr(ls_flat_spin_basis)): c_int;
+extern proc ls_flat_spin_basis_is_representative(basis: c_ptr(ls_flat_spin_basis), count: uint(64),
+                                                 spin: c_void_ptr, is_repr: c_ptr(uint(8)), norm: c_ptr(real));
 // 
 // void ls_flat_spin_basis_state_info(ls_flat_spin_basis const* basis, uint64_t count,
 //                                    void const* spin, void* repr,
 //                                    LATTICE_SYMMETRIES_COMPLEX128* character, double* norm);
-extern proc ls_flat_spin_basis_is_representative(basis: c_ptr(ls_flat_spin_basis), count: uint(64),
-                                                 spin: c_void_ptr, is_repr: c_ptr(uint(8)), norm: c_ptr(real));
 
 
+/* Hash function which we use to map spin configurations to locale indices.
+
+   Typical usage:
+   ```chapel
+   var localeIndex = (hash64_01(x) % numLocales:uint):int;
+   ```
+*/
 proc hash64_01(in x: uint(64)): uint(64) {
   x = (x ^ (x >> 30)) * (0xbf58476d1ce4e5b9:uint(64));
   x = (x ^ (x >> 27)) * (0x94d049bb133111eb:uint(64));
@@ -38,17 +41,17 @@ proc hash64_01(in x: uint(64)): uint(64) {
   return x;
 }
 
-proc hash32_01(in x: uint(32)): uint(32) {
-  x += 1;
-  x ^= x >> 17;
-  x *= 0xed5ad4bb:uint(32);
-  x ^= x >> 11;
-  x *= 0xac4c1b51:uint(32);
-  x ^= x >> 15;
-  x *= 0x31848bab:uint(32);
-  x ^= x >> 14;
-  return x;
-}
+// proc hash32_01(in x: uint(32)): uint(32) {
+//   x += 1;
+//   x ^= x >> 17;
+//   x *= 0xed5ad4bb:uint(32);
+//   x ^= x >> 11;
+//   x *= 0xac4c1b51:uint(32);
+//   x ^= x >> 15;
+//   x *= 0x31848bab:uint(32);
+//   x ^= x >> 14;
+//   return x;
+// }
 
 /* Get next integer with the same hamming weight.
 
@@ -147,6 +150,11 @@ proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
   return x;
 }
 
+/* Splits `[current, bound]` into chunks `{[current, upper_1], [lower_2, upper_2], ..., [lower_N, bound]}`
+   such that `upper_i - lower_i` is approximately `chunkSize`. Note that care
+   is taken to ensure that each `lower_i` and `upper_i` has the right Hamming
+   weight when `isHammingWeightFixed` is `true`.
+ */
 proc splitIntoRanges(in current: uint(64), bound: uint(64), chunkSize: uint(64), isHammingWeightFixed: bool) {
   var ranges: list((uint(64), uint(64)));
   // var isHammingWeightFixed = plugin_get_hamming_weight() != -1;
@@ -173,6 +181,8 @@ proc splitIntoRanges(in current: uint(64), bound: uint(64), chunkSize: uint(64),
   return distRanges;
 }
 
+/* Local chunk of representative spin configurations.
+ */
 record PerLocaleState {
   var size: int;
   var representatives: [0..<size] uint(64);
@@ -182,6 +192,9 @@ record PerLocaleState {
   }
 }
 
+/* Given a distributed array of pointers to `ls_flat_spin_basis` computes
+   representative vectors.
+ */
 proc makeStates(bases: [] c_ptr(ls_flat_spin_basis)) {
   var numberSpins = ls_flat_spin_basis_number_spins(bases[here.id]);
   var hammingWeight = ls_flat_spin_basis_hamming_weight(bases[here.id]);
