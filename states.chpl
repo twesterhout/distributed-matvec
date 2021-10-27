@@ -5,27 +5,7 @@ use SysCTypes;
 use BlockDist;
 use CyclicDist;
 
-// NOTE: What we actually want is:
-// 
-// require "lattice_symmetries/lattice_symmetries.h";
-// extern type ls_flat_spin_basis;
-// extern type ls_error_code;
-//
-// but what we have to do for now is:
-require "dummy.h";
-extern type ls_flat_spin_basis;
-extern type ls_error_code = c_int;
-
-extern proc ls_flat_spin_basis_number_spins(basis: c_ptr(ls_flat_spin_basis)): c_uint;
-extern proc ls_flat_spin_basis_hamming_weight(basis: c_ptr(ls_flat_spin_basis)): c_int;
-extern proc ls_flat_spin_basis_spin_inversion(basis: c_ptr(ls_flat_spin_basis)): c_int;
-extern proc ls_flat_spin_basis_is_representative(basis: c_ptr(ls_flat_spin_basis), count: uint(64),
-                                                 spin: c_void_ptr, is_repr: c_ptr(uint(8)), norm: c_ptr(real));
-// 
-// void ls_flat_spin_basis_state_info(ls_flat_spin_basis const* basis, uint64_t count,
-//                                    void const* spin, void* repr,
-//                                    LATTICE_SYMMETRIES_COMPLEX128* character, double* norm);
-
+use wrapper;
 
 /* Hash function which we use to map spin configurations to locale indices.
 
@@ -87,27 +67,25 @@ proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64),
   return buffer.size;
 }
 
-/* C code uses SIMD and it's beneficial to call plugin_is_representative with
-   count > 1. isRepresentativeBatchSize controls the size of chunks which will
-   be fed to plugin_is_representative.
- */
-config const isRepresentativeBatchSize = 1;
-
-iter findStatesInRange(in lower: uint(64), upper: uint(64), nextStateFn: func(uint(64), uint(64)),
-                       basis: c_ptr(ls_flat_spin_basis)) {
-  const chunkSize = isRepresentativeBatchSize;
+iter findStatesInRange(in lower: uint(64), upper: uint(64),
+                       nextStateFn: func(uint(64), uint(64)),
+                       basis: c_ptr(ls_spin_basis)) {
+  /* C code will use SIMD, and it's beneficial to call ls_is_representative with
+     count > 1. chunkSize controls the size of chunks which will be fed to
+     ls_is_representative.
+   */
+  const chunkSize = 1;
   var buffer: [0..<chunkSize] uint(64);
   var flags: [0..<chunkSize] uint(8);
-  var norms: [0..<chunkSize] real(64);
   while (true) {
     const written = manyNextState(lower, upper, buffer, nextStateFn);
-    ls_flat_spin_basis_is_representative(
-        basis, written:uint, c_ptrTo(buffer):c_void_ptr, c_ptrTo(flags), c_ptrTo(norms));
+    ls_is_representative(
+        basis, written:uint, c_ptrTo(buffer), c_ptrTo(flags));
     for i in {0..<written} {
       if (flags[i]:bool) { yield buffer[i]; }
     }
     if (buffer[written - 1] == upper) { break; }
-    lower = nextStateFn(lower);
+    lower = nextStateFn(buffer[written - 1]);
   }
 }
 
@@ -150,15 +128,16 @@ proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
   return x;
 }
 
-/* Splits `[current, bound]` into chunks `{[current, upper_1], [lower_2, upper_2], ..., [lower_N, bound]}`
+/* Splits `[current, bound]` into chunks
+   `{[current, upper_1], [lower_2, upper_2], ..., [lower_N, bound]}`
    such that `upper_i - lower_i` is approximately `chunkSize`. Note that care
    is taken to ensure that each `lower_i` and `upper_i` has the right Hamming
    weight when `isHammingWeightFixed` is `true`.
  */
-proc splitIntoRanges(in current: uint(64), bound: uint(64), chunkSize: uint(64), isHammingWeightFixed: bool) {
+proc splitIntoRanges(in current: uint(64), bound: uint(64), chunkSize: uint(64),
+                     isHammingWeightFixed: bool) {
   var ranges: list((uint(64), uint(64)));
-  // var isHammingWeightFixed = plugin_get_hamming_weight() != -1;
-  var hammingWeight = popcount(current);
+  const hammingWeight = popcount(current);
   while (true) {
       if (bound - current <= chunkSize) {
           ranges.append((current, bound));
@@ -173,120 +152,58 @@ proc splitIntoRanges(in current: uint(64), bound: uint(64), chunkSize: uint(64),
           break;
       }
       ranges.append((current, next));
-      current = if isHammingWeightFixed then nextStateFixedHamming(next) else nextStateGeneral(next);
+      current = if isHammingWeightFixed then nextStateFixedHamming(next)
+                                        else nextStateGeneral(next);
   }
-
   var distRanges = newCyclicArr({0..<ranges.size}, (uint(64), uint(64)));
   distRanges = ranges;
   return distRanges;
 }
 
-/* Local chunk of representative spin configurations.
- */
-record PerLocaleState {
-  var size: int;
-  var representatives: [0..<size] uint(64);
+proc merge(xs: [?Dom] ?eltType, ys: []) {
+  const count = xs.size + ys.size;
+  var dst: [0..#count] eltType;
+  if (xs.size == 0) { dst = ys; return dst; }
+  if (ys.size == 0) { dst = xs; return dst; }
 
-  proc init(size: int) {
-    this.size = size;
-  }
-}
+  var i_xs = 0;
+  var i_ys = 0;
+  var i = 0;
+  record WriteFromFirst {
+    proc this() {
+      dst[i] = xs[i_xs];
+      i_xs += 1;
+      i += 1;
+    }
+  };
+  var writeFromFirst = new WriteFromFirst();
+  record WriteFromSecond {
+    proc this() {
+      dst[i] = ys[i_ys];
+      i_ys += 1;
+      i += 1;
+    }
+  };
+  var writeFromSecond = new WriteFromSecond();
 
-/* Given a distributed array of pointers to `ls_flat_spin_basis` computes
-   representative vectors.
- */
-proc makeStates(bases: [] c_ptr(ls_flat_spin_basis)) {
-  var numberSpins = ls_flat_spin_basis_number_spins(bases[here.id]);
-  var hammingWeight = ls_flat_spin_basis_hamming_weight(bases[here.id]);
-  var spinInversion = ls_flat_spin_basis_spin_inversion(bases[here.id]);
-  var isHammingWeightFixed = hammingWeight != -1;
-  var lower: uint(64);
-  var upper: uint(64);
-  if (isHammingWeightFixed) {
-    lower = ~(0:uint(64)) >> (64 - hammingWeight);
-    upper = lower << (numberSpins - hammingWeight);
-  }
-  else {
-    lower = 0;
-    if (numberSpins == 64) { upper = ~(0:uint(64)); }
-    else { upper = (1:uint(64) << numberSpins) - 1; }
-  }
-
-  var chunkSize = max((upper - lower) / 1000, 1);
-  writeln("Using chunkSize=", chunkSize, "...");
-  var ranges = splitIntoRanges(lower, upper, chunkSize, isHammingWeightFixed);
-  const D = {0..<ranges.size} dmapped Cyclic(startIdx=0);
-  var chunks: [D] [LocaleSpace] list(uint(64));
-
-  var nextStateFn: func(uint(64), uint(64));
-  if (isHammingWeightFixed) { nextStateFn = nextStateFixedHamming; }
-  else { nextStateFn = nextStateGeneral; }
-  forall ((lower, upper), chunk) in zip(ranges, chunks) with (in nextStateFn) {
-    for x in findStatesInRange(lower, upper, nextStateFn, bases[here.id]) {
-      var hash = (hash64_01(x) % numLocales:uint):int;
-      chunk[hash].append(x);
+  while (i_xs < xs.size) {
+    if (i_ys == ys.size) {
+      dst[i..] = xs[i_xs..];
+      return dst;
+    }
+    if (xs[i_xs] <= ys[i_ys]) {
+      writeFromFirst();
+      // dst[i] = xs[i_xs];
+      // i_xs += 1;
+      // i += 1;
+    }
+    else {
+      writeFromSecond();
+      // dst[i] = ys[i_ys];
+      // i_ys += 1;
+      // i += 1;
     }
   }
-
-  const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
-  var counts: [OnePerLocale] int =
-    [j in LocaleSpace] (+ reduce [i in 0..<ranges.size] chunks[i][j].size);
-  var maxCount = max reduce counts;
-  writeln("Counts: ", counts); // For analyzing how uniform the distribution is.
-
-  var states: [OnePerLocale] PerLocaleState =
-    [i in OnePerLocale] new PerLocaleState(counts[i]);
-
-  // var states: [OnePerLocale] [0..<maxCount] uint(64);
-  coforall loc in Locales do on loc {
-    var offset: int = 0;
-    for i in {0..<ranges.size} {
-      var c = chunks[i][loc.id].size;
-      states[loc.id].representatives[offset..<offset + c] = chunks[i][loc.id];
-      offset += c;
-    }
-  }
-
-  return states;
-
-
-
-  // var perLocaleStates: [OnePerLocale] PerLocaleState;
-  //   this.localStates = [i in OnePerLocale] new PerLocaleState(counts[i]);
-  //   coforall loc in Locales do on loc {
-  //     this.localStates[loc.id].representatives = states[loc.id][0..<counts[loc.id]];
-  //   }
-  // return (states, counts);
+  dst[i..] = ys[i_ys..];
+  return dst;
 }
-
-
-// export proc foo(k: c_uint): opaque {
-//   const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
-//   var contexts: [OnePerLocale] c_void_ptr;
-//   for loc in Locales do on loc { contexts[loc.id] = plugin_new_options_example_01(k); }
-//   var (states, counts) = makeStates(contexts);
-//   for loc in Locales do on loc { plugin_delete_options_example_01(contexts[loc.id]); }
-// 
-//   var localStates: [OnePerLocale] PerLocaleState = [i in OnePerLocale] new PerLocaleState(counts[i]);
-//   coforall loc in Locales do on loc {
-//     localStates[loc.id].representatives = states[loc.id][0..<counts[loc.id]];
-//   }
-// 
-//   // var ret = convertToExternalArray(localStates);
-//   return localStates;
-// }
-
-
-// Creates a distributed array of basis states.
-//
-// First, a normal array is obtained from libplugin.so, but since our C code
-// has no knowledge about locales, the array is located on `here`. We
-// distribute the array to emulate the real-world scenario.
-// proc makeStates() {
-//   var dim = plugin_get_dimension():int;
-//   var _p: c_ptr(uint(64)) = plugin_get_basis_states();
-//   var _states = makeArrayFromPtr(_p, dim:uint);
-//   const D = {0..<dim};
-//   var states: [D dmapped Block(boundingBox={0..<dim})] uint(64) = _states;
-//   return states;
-// }
