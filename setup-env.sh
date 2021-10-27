@@ -1,4 +1,6 @@
 export PKG_CONFIG_PATH=/home/tom/src/lattice-symmetries/prefix/lib/pkgconfig
-export LD_LIBRARY_PATH=/home/tom/src/lattice-symmetries/prefix/lib
+export LD_LIBRARY_PATH=/home/tom/src/lattice-symmetries/prefix/lib:/home/tom/src/lattice-symmetries-haskell/build
 export CHPL_COMM_SUBSTRATE=smp CHPL_COMM=gasnet
-source "${HOME}/src/chapel-1.24.1/util/setchplenv.bash"
+# export CHPL_COMM=none
+export CHPL_LLVM=system CHPL_UNWIND=system CHPL_LIB_PIC=pic
+source "${HOME}/src/chapel-1.25.0/util/setchplenv.bash"
