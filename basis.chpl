@@ -7,6 +7,7 @@ use Time;
 
 use wrapper;
 use states;
+use Merge;
 
 const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
 
@@ -62,6 +63,12 @@ class LocalBasisStates {
   proc init(size: int) { this.size = size; }
 }
 
+class BasisStates {
+  var size : int;
+  var representatives : [OnePerLocale] [0 ..# size] uint(64);
+  var counts : [OnePerLocale] int;
+}
+
 // proc numlocs() param where (CHPL_COMM==none) {
 //   return 1;
 // }
@@ -94,24 +101,24 @@ proc makeStates(basis: DistributedBasis) {
   // const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
   var counts: [OnePerLocale] int =
     [j in LocaleSpace] (+ reduce [i in 0..<ranges.size] chunks[i][j].size);
-  // var maxCount = max reduce counts;
+  const maxCount = max reduce counts;
   writeln("[Chapel] Counts: ", counts); // For analyzing how uniform the distribution is.
 
-  var states: [OnePerLocale] owned LocalBasisStates =
-    [i in OnePerLocale] new LocalBasisStates(counts[i]);
+  var states: [OnePerLocale] [0 ..# maxCount] uint(64);
   coforall loc in Locales do on loc {
     var offset: int = 0;
     for i in {0..<ranges.size} {
       var c = chunks[i][loc.id].size;
-      states[loc.id].representatives[offset..<offset + c] = chunks[i][loc.id];
+      states[loc.id][offset..<offset + c] = chunks[i][loc.id];
       offset += c;
     }
   }
-  return states;
+  // NOTE: this creates a copy of states, right? :(
+  return new BasisStates(maxCount, states, counts);
 }
 
-config const yamlPath = "/home/tom/src/spin-ed/example/heisenberg_chain_4.yaml";
-      // "/home/tom/src/spin-ed/example/heisenberg_square_4x4.yaml"
+config const yamlPath = "/home/tom/src/spin-ed/example/heisenberg_square_4x4.yaml";
+  // "/home/tom/src/spin-ed/example/heisenberg_chain_4.yaml";
 
 proc real_main() {
   const basis = new shared DistributedBasis(yamlPath);
@@ -121,10 +128,20 @@ proc real_main() {
   timer.stop();
   writeln("[Chapel] makeStates took ", timer.elapsed());
 
-  writeln(states[0].representatives);
-  writeln(states[1].representatives);
-  writeln(merge(states[0].representatives, states[1].representatives));
-  writeln(merge(states[1].representatives, states[0].representatives));
+  for i in states.representatives.domain.dim(0) {
+    writeln(states.representatives[i][0 ..# states.counts[i]]);
+  }
+
+  mergeStates(states.representatives, states.counts);
+  // var edges = computeRanges(states.representatives, states.counts);
+  // for i in edges.domain.dim(0) {
+  //   writeln(edges[i]);
+  // }
+
+  // writeln(states[0].representatives);
+  // writeln(states[1].representatives);
+  // writeln(merge(states[0].representatives, states[1].representatives));
+  // writeln(merge(states[1].representatives, states[0].representatives));
 }
 
 proc main() {
@@ -132,6 +149,7 @@ proc main() {
     ls_enable_logging();
     ls_hs_init();
   }
+  // merge_test();
   real_main();
   for loc in Locales do on loc {
     ls_hs_exit();

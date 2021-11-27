@@ -1,6 +1,8 @@
+module Merge {
 /* k-way merge
  */
 use List;
+use Search;
 
 record Node {
   var chunkIndex : int;
@@ -27,85 +29,154 @@ record TournamentTree {
   }
 }
 
-inline proc _isLess(const ref a : Node, const ref b : Node, chunks...) : bool {
+inline proc _isLess(const ref a : Node, const ref b : Node,
+                    const ref chunks, const ref counts) : bool {
   assert(!a.isEmpty() && !b.isEmpty());
   if a.isInfinity() { return false; }
   if b.isInfinity() { return true; }
   return chunks[a.chunkIndex][a.indexInChunk] < chunks[b.chunkIndex][b.indexInChunk];
 }
 
-proc _insert(ref tree: TournamentTree, i : int, const ref node : Node, chunks...) : void {
+proc _insert(ref tree: TournamentTree, i : int, const ref node : Node,
+             const ref chunks, const ref counts) : void {
   assert(i != -1);
   assert(!node.isEmpty());
   if (tree.nodes[i].isEmpty()) { tree.nodes[i] = node; }
   else {
     const parent : int = tree.innerParentIndex(i);
-    if (_isLess(node, tree.nodes[i], (...chunks))) {
-      _insert(tree, parent, node, (...chunks));
+    if (_isLess(node, tree.nodes[i], chunks, counts)) {
+      _insert(tree, parent, node, chunks, counts);
     }
     else {
       const old = tree.nodes[i];
       tree.nodes[i] = node;
-      _insert(tree, parent, old, (...chunks));
+      _insert(tree, parent, old, chunks, counts);
     }
   }
 }
-inline proc _insert(ref tree: TournamentTree, const ref node : Node, chunks...) : void {
-  _insert(tree, node.outerParentIndex, node, (...chunks));
+inline proc _insert(ref tree: TournamentTree, const ref node : Node,
+                    const ref chunks, const ref counts) : void {
+  _insert(tree, node.outerParentIndex, node, chunks, counts);
 }
 
 inline proc _makeNode(chunkIndex : int, in indexInChunk : int,
-                      outerParentIndex : int, chunks...) {
-  if chunkIndex >= chunks.size || indexInChunk >= chunks[chunkIndex].size {
+                      outerParentIndex : int, const ref chunks,
+                      const ref counts) {
+  if chunkIndex >= chunks.dim(0).size || indexInChunk >= counts[chunkIndex] {
     indexInChunk = -1;
   }
   return new Node(chunkIndex, indexInChunk, outerParentIndex);
 }
 
-proc _buildTree(chunks...) {
-  const numberChunks = chunks.size + (chunks.size % 2);
+proc _buildTree(const ref chunks, const ref counts) {
+  const numberChunks = chunks.dim(0).size + (chunks.dim(0).size % 2);
   var tree = new TournamentTree(numberChunks);
   for i in 0 .. #numberChunks / 2 {
     const outerParentIndex = numberChunks - 1 - i;
     _insert(tree,
-        _makeNode(numberChunks - 1 - 2 * i, 0, outerParentIndex, (...chunks)),
-        (...chunks));
+        _makeNode(numberChunks - 1 - 2 * i, 0, outerParentIndex, chunks, counts),
+        chunks, counts);
     _insert(tree,
-        _makeNode(numberChunks - 2 - 2 * i, 0, outerParentIndex, (...chunks)),
-        (...chunks));
+        _makeNode(numberChunks - 2 - 2 * i, 0, outerParentIndex, chunks, counts),
+        chunks, counts);
   }
   return tree;
 }
 
-proc _processOne(ref tree : TournamentTree, chunks...) {
+proc _processOne(ref tree : TournamentTree, const ref chunks, const ref counts) {
   const result = tree.nodes[0];
   if (result.isInfinity()) { return result; }
   tree.nodes[0] = new Node(-1, -1, -1);
   const node = _makeNode(result.chunkIndex, result.indexInChunk + 1,
-                         result.outerParentIndex, (...chunks));
-  _insert(tree, node, (...chunks));
+                         result.outerParentIndex, chunks, counts);
+  _insert(tree, node, chunks, counts);
   return result;
 }
 
-iter kmerge(chunks...) {
-  var tree = _buildTree((...chunks));
-  var root = _processOne(tree, (...chunks));
+iter kmerge(const ref chunks, const ref counts) {
+  var tree = _buildTree(chunks, counts);
+  var root = _processOne(tree, chunks, counts);
   while (!root.isInfinity()) {
     yield chunks[root.chunkIndex][root.indexInChunk];
-    root = _processOne(tree, (...chunks));
+    root = _processOne(tree, chunks, counts);
   }
 }
 
-proc main()
+proc indicesForBounds(states : [] ?eltType, bounds: list(?eltType2)) {
+  assert(eltType == eltType2);
+  assert(states.size > 0 && bounds.size > 1);
+  assert(bounds[0] <= states[0]);
+  assert(bounds[bounds.size - 1] >= states[states.size - 1]);
+
+  var edges : [0 ..# bounds.size] int;
+  edges[0] = 0;
+  edges[edges.size - 1] = states.size;
+  for i in 1 .. bounds.size - 2 {
+    // TODO: can be improved by setting stricted bounds where to search
+    const (found, location) = binarySearch(states, bounds[i]);
+    edges[i] = location;
+    writeln(i, ", ", bounds[i], ", ", found, ", ", location);
+  }
+  writeln(states, ", ", bounds, " -> ", edges);
+  return edges;
+}
+
+proc computeRanges(const ref states, const ref counts : [] int) {
+  assert(states.domain.dim(0) == counts.domain.dim(0));
+  const D1 = states.domain.dim(0);
+  const lower = min reduce [i in D1] states[i][0];
+  const upper = max reduce [i in D1] states[i][counts[i] - 1];
+  const maxCount = max reduce counts;
+  const chunkSize = max((upper - lower):int / (5 * numLocales), 1);
+
+  var bounds : list(uint(64));
+  bounds.append(lower);
+  var offset = chunkSize;
+  while (offset < maxCount) {
+    bounds.append(states[0][offset]);
+    offset += chunkSize;
+  }
+  bounds.append(upper);
+
+  var edges : [D1] [0 ..# bounds.size] int;
+  for i in D1 do on counts[i] {
+    edges[i] = indicesForBounds(states[i][0 ..# counts[i]], bounds);
+  }
+
+  return edges;
+}
+
+proc mergeStates(const ref states, const ref counts : [?D] int) {
+  const indexEdges = computeRanges(states, counts);
+  writeln(indexEdges);
+  const numberRanges = 1; // indexEdges.domain.dim(1).size - 1;
+  for k in 0 .. numberRanges - 1 {
+    var localCounts = [i in indexEdges.dim(0)] indexEdges[i][k + 1] - indexEdges[i][k];
+    var maxLocalCount = max reduce localCounts;
+    var localStates : [0 .. states.dim(0).size - 1] [0 .. maxLocalCount - 1] uint(64);
+    for i in 0 .. states.dim(0).size - 1 {
+      localStates[i][0 .. localCounts[i] - 1] =
+        states[i][indexEdges[i][k] .. indexEdges[i][k + 1] - 1];
+    }
+
+    for x in kmerge(localStates, localCounts) {
+      writeln(x);
+    }
+  }
+}
+
+proc merge_test()
 {
-  var chunks = (
-    new list([45, 47]),
-    new list(int),
-    new list([4, 15, 16, 19]),
-    new list([17, 82]),
-    new list([0, 16]),
-    // new list([1, 1, 90]),
-  );
-  for x in kmerge((...chunks)) do
+  var chunks = [
+    [45, 47,  0,  0],
+    [0,   0,  0,  0],
+    [4,  15, 16, 19],
+    [17, 82,  0,  0],
+    [0,   0,  0,  0],
+  ];
+  var counts = [2, 0, 4, 2, 1];
+  for x in kmerge(chunks, counts) do
     writeln(x);
 }
+
+} // end module
