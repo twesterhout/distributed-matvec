@@ -33,10 +33,10 @@ class DistributedBasis {
     }
   }
 
-  proc rawPtr() { return this._localBases[here.id].payload; }
-  proc numberSpins() { return ls_get_number_spins(this.rawPtr()); }
-  proc hammingWeight() { return ls_get_hamming_weight(this.rawPtr()); }
-  proc isHammingWeightFixed() { return this.hammingWeight() != -1; }
+  inline proc rawPtr() { return this._localBases[here.id].payload; }
+  inline proc numberSpins() { return ls_get_number_spins(this.rawPtr()); }
+  inline proc hammingWeight() { return ls_get_hamming_weight(this.rawPtr()); }
+  inline proc isHammingWeightFixed() { return this.hammingWeight() != -1; }
 
   proc statesBounds() {
     var lower: uint(64);
@@ -54,15 +54,6 @@ class DistributedBasis {
   }
 };
 
-/* Local chunk of representative spin configurations.
- */
-class LocalBasisStates {
-  var size: int;
-  var representatives: [0..<size] uint(64);
-
-  proc init(size: int) { this.size = size; }
-}
-
 class BasisStates {
   var size : int;
   var representatives : [OnePerLocale] [0 ..# size] uint(64);
@@ -77,26 +68,35 @@ class BasisStates {
 // }
 
 proc makeStates(basis: DistributedBasis) {
+  var timer = new Timer();
+  timer.start();
   const (lower, upper) = basis.statesBounds();
   const chunkSize = max((upper - lower) / 1000, 1);
-  // writeln("[Chapel] Using chunkSize = ", chunkSize, "...");
   const ranges = splitIntoRanges(
     lower, upper, chunkSize, basis.isHammingWeightFixed());
-  const D = {0..<ranges.size} dmapped Cyclic(startIdx=0);
+  timer.stop();
+  writeln("[Chapel] Using chunkSize = ", chunkSize, "; constructed ",
+          ranges.size, " ranges in ", timer.elapsed());
+  timer.clear();
+  timer.start();
+  const D = {0 .. ranges.size - 1} dmapped Cyclic(startIdx=0);
   var chunks: [D] [LocaleSpace] list(uint(64));
+  timer.stop();
+  writeln("[Chapel] Allocated chunks in ", timer.elapsed());
 
+  timer.clear();
+  timer.start();
   const nextStateFn: func(uint(64), uint(64));
   if (basis.isHammingWeightFixed()) { nextStateFn = nextStateFixedHamming; }
   else { nextStateFn = nextStateGeneral; }
-  // writeln("[Chapel] Calling main forall...");
-  // writeln("[Chapel] bases = ", bases);
   forall ((lower, upper), chunk) in zip(ranges, chunks) with (in nextStateFn) {
     for x in findStatesInRange(lower, upper, nextStateFn, basis.rawPtr()) {
       const hash = (hash64_01(x) % numLocales:uint):int;
       chunk[hash].append(x);
     }
   }
-  // writeln("[Chapel] Constructed all chunks");
+  timer.stop();
+  writeln("[Chapel] Constructed all chunks in ", timer.elapsed());
 
   // const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
   var counts: [OnePerLocale] int =
@@ -109,15 +109,17 @@ proc makeStates(basis: DistributedBasis) {
     var offset: int = 0;
     for i in {0..<ranges.size} {
       var c = chunks[i][loc.id].size;
-      states[loc.id][offset..<offset + c] = chunks[i][loc.id];
+      states[loc.id][offset .. offset + c - 1] = chunks[i][loc.id];
       offset += c;
     }
   }
+  writeln("[Chapel] Constructed states ...");
   // NOTE: this creates a copy of states, right? :(
   return new BasisStates(maxCount, states, counts);
 }
 
-config const yamlPath = "/home/tom/src/spin-ed/example/heisenberg_square_4x4.yaml";
+config const yamlPath = "/home/tom/src/spin-ed/example/heisenberg_pyrochlore_32.yaml";
+  // "/home/tom/src/spin-ed/example/heisenberg_square_4x4.yaml";
   // "/home/tom/src/spin-ed/example/heisenberg_chain_4.yaml";
 
 proc real_main() {
@@ -129,10 +131,11 @@ proc real_main() {
   writeln("[Chapel] makeStates took ", timer.elapsed());
 
   for i in states.representatives.domain.dim(0) {
-    writeln(states.representatives[i][0 ..# states.counts[i]]);
+    // writeln(states.representatives[i][0 ..# states.counts[i]]);
+    writeln(states.counts[i]);
   }
 
-  mergeStates(states.representatives, states.counts);
+  // mergeStates(states.representatives, states.counts);
   // var edges = computeRanges(states.representatives, states.counts);
   // for i in edges.domain.dim(0) {
   //   writeln(edges[i]);

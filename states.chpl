@@ -4,6 +4,7 @@ use CPtr;
 use SysCTypes;
 use BlockDist;
 use CyclicDist;
+use Time;
 
 use wrapper;
 
@@ -14,7 +15,7 @@ use wrapper;
    var localeIndex = (hash64_01(x) % numLocales:uint):int;
    ```
 */
-proc hash64_01(in x: uint(64)): uint(64) {
+inline proc hash64_01(in x: uint(64)): uint(64) {
   x = (x ^ (x >> 30)) * (0xbf58476d1ce4e5b9:uint(64));
   x = (x ^ (x >> 27)) * (0x94d049bb133111eb:uint(64));
   x = x ^ (x >> 31);
@@ -43,19 +44,19 @@ proc hash64_01(in x: uint(64)): uint(64) {
    return v;
    ```
  */
-proc nextStateFixedHamming(v: uint(64)): uint(64) {
+inline proc nextStateFixedHamming(v: uint(64)): uint(64) {
   const t = v | (v - 1);
   return (t + 1) | (((~t & (t + 1)) - 1) >> (ctz(v) + 1));
 }
 
-proc nextStateGeneral(v: uint(64)): uint(64) {
+inline proc nextStateGeneral(v: uint(64)): uint(64) {
   return v + 1;
 }
 
 /* Fill buffer using either nextStateFixedHamming or nextStateGeneral. Returns
    the number of elements written.
  */
-proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64),
+inline proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64),
                    nextStateFn: func(uint(64), uint(64))) {
   assert(v <= bound);
   for i in buffer.domain {
@@ -89,13 +90,13 @@ iter findStatesInRange(in lower: uint(64), upper: uint(64),
   }
 }
 
-proc testBit(bits: uint(64), i: int): bool { return ((bits >> i) & 1):bool; }
-proc clearBit(bits: uint(64), i: int) { return bits & ~(1:uint(64) << i); }
-proc setBit(bits: uint(64), i: int) { return bits | (1:uint(64) << i); }
+inline proc testBit(bits: uint(64), i: int): bool { return ((bits >> i) & 1):bool; }
+inline proc clearBit(bits: uint(64), i: int) { return bits & ~(1:uint(64) << i); }
+inline proc setBit(bits: uint(64), i: int) { return bits | (1:uint(64) << i); }
 
 /* Get the closest to `x` integer with Hamming weight `hammingWeight`.
  */
-proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
+inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
   assert(hammingWeight <= 64);
   var weight = popcount(x);
   if (weight > hammingWeight) {
@@ -136,6 +137,9 @@ proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
  */
 proc splitIntoRanges(in current: uint(64), bound: uint(64), chunkSize: uint(64),
                      isHammingWeightFixed: bool) {
+  var timer = new Timer();
+  timer.start();
+
   var ranges: list((uint(64), uint(64)));
   const hammingWeight = popcount(current);
   while (true) {
@@ -155,55 +159,13 @@ proc splitIntoRanges(in current: uint(64), bound: uint(64), chunkSize: uint(64),
       current = if isHammingWeightFixed then nextStateFixedHamming(next)
                                         else nextStateGeneral(next);
   }
-  var distRanges = newCyclicArr({0..<ranges.size}, (uint(64), uint(64)));
+  timer.stop();
+  writeln("[Chapel] Constructing ranges took ", timer.elapsed());
+  timer.clear();
+  timer.start();
+  var distRanges = newCyclicArr({0.. ranges.size - 1}, (uint(64), uint(64)));
   distRanges = ranges;
+  timer.stop();
+  writeln("[Chapel] Copying to distRanges took ", timer.elapsed());
   return distRanges;
-}
-
-proc merge(xs: [?Dom] ?eltType, ys: []) {
-  const count = xs.size + ys.size;
-  var dst: [0..#count] eltType;
-  if (xs.size == 0) { dst = ys; return dst; }
-  if (ys.size == 0) { dst = xs; return dst; }
-
-  var i_xs = 0;
-  var i_ys = 0;
-  var i = 0;
-  record WriteFromFirst {
-    proc this() {
-      dst[i] = xs[i_xs];
-      i_xs += 1;
-      i += 1;
-    }
-  };
-  var writeFromFirst = new WriteFromFirst();
-  record WriteFromSecond {
-    proc this() {
-      dst[i] = ys[i_ys];
-      i_ys += 1;
-      i += 1;
-    }
-  };
-  var writeFromSecond = new WriteFromSecond();
-
-  while (i_xs < xs.size) {
-    if (i_ys == ys.size) {
-      dst[i..] = xs[i_xs..];
-      return dst;
-    }
-    if (xs[i_xs] <= ys[i_ys]) {
-      writeFromFirst();
-      // dst[i] = xs[i_xs];
-      // i_xs += 1;
-      // i += 1;
-    }
-    else {
-      writeFromSecond();
-      // dst[i] = ys[i_ys];
-      // i_ys += 1;
-      // i += 1;
-    }
-  }
-  dst[i..] = ys[i_ys..];
-  return dst;
 }
