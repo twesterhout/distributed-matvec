@@ -130,7 +130,7 @@ module Merge {
     var bounds : list(uint(64));
     bounds.append(lower);
     var offset = chunkSize;
-    while (offset < maxCount) {
+    while (offset < counts[0]) {
       bounds.append(states[0][offset]);
       offset += chunkSize;
     }
