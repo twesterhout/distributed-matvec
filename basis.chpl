@@ -4,6 +4,7 @@ use SysCTypes;
 use BlockDist;
 use CyclicDist;
 use Time;
+use VisualDebug;
 
 use wrapper;
 use states;
@@ -68,6 +69,8 @@ class BasisStates {
 // }
 
 proc makeStates(basis: DistributedBasis) {
+  // startVdebug("E1");
+
   var timer = new Timer();
   timer.start();
   const (lower, upper) = basis.statesBounds();
@@ -90,6 +93,7 @@ proc makeStates(basis: DistributedBasis) {
   if (basis.isHammingWeightFixed()) { nextStateFn = nextStateFixedHamming; }
   else { nextStateFn = nextStateGeneral; }
   forall ((lower, upper), chunk) in zip(ranges, chunks) with (in nextStateFn) {
+    assert(chunk.locale == here.locale);
     for x in findStatesInRange(lower, upper, nextStateFn, basis.rawPtr()) {
       const hash = (hash64_01(x) % numLocales:uint):int;
       chunk[hash].append(x);
@@ -114,6 +118,9 @@ proc makeStates(basis: DistributedBasis) {
     }
   }
   writeln("[Chapel] Constructed states ...");
+
+  // stopVdebug();
+
   // NOTE: this creates a copy of states, right? :(
   return new BasisStates(maxCount, states, counts);
 }
@@ -121,8 +128,17 @@ proc makeStates(basis: DistributedBasis) {
 config const yamlPath = "/home/tom/src/spin-ed/example/heisenberg_pyrochlore_32.yaml";
   // "/home/tom/src/spin-ed/example/heisenberg_square_4x4.yaml";
   // "/home/tom/src/spin-ed/example/heisenberg_chain_4.yaml";
+config const dataPath = "output.h5";
+config const datasetPath = "/representatives";
 
 proc real_main() {
+  ls_hs_hdf5_create_dataset_u64(
+    dataPath.c_str(), datasetPath.c_str(), 1, c_ptrTo([10:uint]));
+  var chunk : [0 .. 3] uint(64) = [i in 1:uint .. 4:uint] i;
+  ls_hs_hdf5_write_1d_chunk_u64(
+    dataPath.c_str(), datasetPath.c_str(), 2, chunk.size:uint, c_ptrTo(chunk));
+  // return;
+
   const basis = new shared DistributedBasis(yamlPath);
   var timer = new Timer();
   timer.start();
@@ -135,7 +151,7 @@ proc real_main() {
     writeln(states.counts[i]);
   }
 
-  // mergeStates(states.representatives, states.counts);
+  mergeStates(states.representatives, states.counts, dataPath, datasetPath);
   // var edges = computeRanges(states.representatives, states.counts);
   // for i in edges.domain.dim(0) {
   //   writeln(edges[i]);

@@ -1,7 +1,7 @@
 .POSIX:
 
-CFLAGS = `pkg-config --cflags lattice_symmetries`
-LDFLAGS = `pkg-config --libs lattice_symmetries`
+CFLAGS = -I/home/tom/src/lattice-symmetries-haskell/cbits `pkg-config --cflags lattice_symmetries`
+LDFLAGS = -L/home/tom/src/lattice-symmetries-haskell/build -llattice_symmetries_haskell `pkg-config --libs lattice_symmetries` 
 
 all: basis
 
@@ -15,19 +15,28 @@ all: basis
 # basis: basis.chpl states.chpl
 # 	chpl $(CFLAGS) --main-module basis -o $@ $^ $(LDFLAGS) 
 
-basis: lib/libbasis.a
-lib/libbasis.a: basis.chpl states.chpl
-	chpl $(CFLAGS) --library --static --library-makefile -o basis $^ $(LDFLAGS) 
+# basis: lib/libbasis.a
+# lib/libbasis.a: basis.chpl states.chpl
+# 	chpl $(CFLAGS) --library --static --library-makefile -o basis $^ $(LDFLAGS) 
 
--include lib/Makefile.basis
-main: main.c basis
-	$(CHPL_COMPILER) $(CHPL_CFLAGS) -o $@ $< $(CHPL_LDFLAGS)
+basis: basis.chpl states.chpl merge.chpl
+	chpl $(CFLAGS) --debug -o basis $^ $(LDFLAGS) 
+
+merge: merge.chpl
+	chpl $(CFLAGS) --debug -o merge $^ $(LDFLAGS) 
+
+junk: junk.chpl
+	chpl --debug -o $@ $^
+
+# -include lib/Makefile.basis
+# main: main.c basis
+# 	$(CHPL_COMPILER) $(CHPL_CFLAGS) -o $@ $< $(CHPL_LDFLAGS)
 
 # Dummy file we use to reproduce internal compiler errors in Chapel for
 # submitting issues.
 .PHONY: error
 error: error.chpl
-	chpl -o $@ $^ $(LDFLAGS) 
+	chpl -o $@ $^
 
 # lib/libstates.a: states.chpl libplugin.a
 # 	chpl --static --library --library-makefile -L. -lplugin $(LDFLAGS) plugin.h $<

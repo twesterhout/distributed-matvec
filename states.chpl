@@ -57,7 +57,7 @@ inline proc nextStateGeneral(v: uint(64)): uint(64) {
    the number of elements written.
  */
 inline proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64),
-                   nextStateFn: func(uint(64), uint(64))) {
+                          nextStateFn: func(uint(64), uint(64))) {
   assert(v <= bound);
   for i in buffer.domain {
     buffer[i] = v;
@@ -75,9 +75,9 @@ iter findStatesInRange(in lower: uint(64), upper: uint(64),
      count > 1. chunkSize controls the size of chunks which will be fed to
      ls_is_representative.
    */
-  const chunkSize = 1;
-  var buffer: [0..<chunkSize] uint(64);
-  var flags: [0..<chunkSize] uint(8);
+  const chunkSize = 1024;
+  var buffer: [0 .. chunkSize - 1] uint(64);
+  var flags: [0 .. chunkSize - 1] uint(8);
   while (true) {
     const written = manyNextState(lower, upper, buffer, nextStateFn);
     ls_is_representative(

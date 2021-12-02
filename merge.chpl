@@ -125,7 +125,7 @@ module Merge {
     const lower = min reduce [i in D1] states[i][0];
     const upper = max reduce [i in D1] states[i][counts[i] - 1];
     const maxCount = max reduce counts;
-    const chunkSize = max((upper - lower):int / (5 * numLocales), 1);
+    const chunkSize = max(counts[0] / (5 * numLocales), 1);
 
     var bounds : list(uint(64));
     bounds.append(lower);
@@ -135,31 +135,55 @@ module Merge {
       offset += chunkSize;
     }
     bounds.append(upper);
+    writeln("bounds: ", bounds);
 
-    var edges : [D1] [0 ..# bounds.size] int;
+    var edges : [0 .. D1.size - 1, 0 .. bounds.size - 1] int;
     for i in D1 do on counts[i] {
-      edges[i] = indicesForBounds(states[i][0 ..# counts[i]], bounds);
+      edges[i, ..] = indicesForBounds(states[i][0 .. counts[i] - 1], bounds);
     }
 
     return edges;
   }
 
-  proc mergeStates(const ref states, const ref counts : [?D] int) {
+  proc mergeStates(const ref states, const ref counts : [] int,
+                   filename: string, dataset: string) {
+    // Prepare the output file
+    const totalCount = (+ reduce counts);
+    ls_hs_hdf5_create_dataset_u64(
+      filename.c_str(), dataset.c_str(), 1, c_ptrTo([totalCount:uint]));
+
+    // Split all states into smaller chunks
     const indexEdges = computeRanges(states, counts);
-    writeln(indexEdges);
-    const numberRanges = 1; // indexEdges.domain.dim(1).size - 1;
+    const numberRanges = indexEdges.domain.dim(1).size - 1;
+    // Compute sizes of those chunks
+    var offsets : [0 .. numberRanges] uint(64);
+    offsets[0] = 0;
+    for j in 1 .. numberRanges {
+      const n = (+ reduce [i in indexEdges.dim(0)] indexEdges[i, j] - indexEdges[i, j - 1]);
+      offsets[j] = offsets[j - 1] + n:uint;
+    }
+    // Iterate over chunks
+    // TODO: parallelize
     for k in 0 .. numberRanges - 1 {
-      var localCounts = [i in indexEdges.dim(0)] indexEdges[i][k + 1] - indexEdges[i][k];
+      // Prepare for kmerge
+      var localCounts = [i in indexEdges.dim(0)] indexEdges[i, k + 1] - indexEdges[i, k];
       var maxLocalCount = max reduce localCounts;
+      // Copy chunks from different locales to here
       var localStates : [0 .. states.dim(0).size - 1] [0 .. maxLocalCount - 1] uint(64);
       for i in 0 .. states.dim(0).size - 1 {
         localStates[i][0 .. localCounts[i] - 1] =
-          states[i][indexEdges[i][k] .. indexEdges[i][k + 1] - 1];
+          states[i][indexEdges[i, k] .. indexEdges[i, k + 1] - 1];
       }
+      // Run kmerge locally
+      const localCount = offsets[k + 1] - offsets[k];
+      assert(localCount:int == + reduce localCounts);
+      var combinedLocalStates : [0 .. localCount - 1] uint(64) =
+        kmerge(localStates, localCounts);
 
-      for x in kmerge(localStates, localCounts) {
-        writeln(x);
-      }
+      // Save to file
+      // TODO: make async
+      ls_hs_hdf5_write_1d_chunk_u64(filename.c_str(), dataset.c_str(),
+        offsets[k], localCount, c_ptrTo(combinedLocalStates));
     }
   }
 
