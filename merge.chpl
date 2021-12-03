@@ -30,7 +30,8 @@ module Merge {
   inline proc indexAccess(const ref chunks, i : int, j : int) {
     return chunks[i][j];
   }
-  inline proc indexAccess(const ref chunks : [?D] ?elType, i : int, j : int) {
+  inline proc indexAccess(const ref chunks : [?D] ?eltType, i : int, j : int)
+      where (D.rank == 2) {
     return chunks[i, j];
   }
 
@@ -143,7 +144,7 @@ module Merge {
       offset += chunkSize;
     }
     bounds.append(upper);
-    writeln("bounds: ", bounds);
+    // writeln("bounds: ", bounds);
 
     var edges : [0 .. D1.size - 1, 0 .. bounds.size - 1] int;
     for i in D1 do on counts[i] {
@@ -207,5 +208,4 @@ module Merge {
     for x in kmerge(chunks, counts) do
       writeln(x);
   }
-
 } // end module

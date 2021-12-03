@@ -69,7 +69,7 @@ class BasisStates {
 // }
 
 proc makeStates(basis: DistributedBasis) {
-  // startVdebug("E1");
+  // startVdebug("makeStates");
 
   var timer = new Timer();
   timer.start();
@@ -102,11 +102,14 @@ proc makeStates(basis: DistributedBasis) {
   timer.stop();
   writeln("[Chapel] Constructed all chunks in ", timer.elapsed());
 
+  timer.clear();
+  timer.start();
   // const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
   var counts: [OnePerLocale] int =
     [j in LocaleSpace] (+ reduce [i in 0..<ranges.size] chunks[i][j].size);
   const maxCount = max reduce counts;
-  writeln("[Chapel] Counts: ", counts); // For analyzing how uniform the distribution is.
+  // For analyzing how uniform the distribution is.
+  // writeln("[Chapel] Counts: ", counts);
 
   var states: [OnePerLocale] [0 ..# maxCount] uint(64);
   coforall loc in Locales do on loc {
@@ -117,7 +120,8 @@ proc makeStates(basis: DistributedBasis) {
       offset += c;
     }
   }
-  writeln("[Chapel] Constructed states ...");
+  timer.stop();
+  writeln("[Chapel] Constructed states in ", timer.elapsed());
 
   // stopVdebug();
 
@@ -128,39 +132,31 @@ proc makeStates(basis: DistributedBasis) {
 config const yamlPath = "/home/tom/src/spin-ed/example/heisenberg_pyrochlore_32.yaml";
   // "/home/tom/src/spin-ed/example/heisenberg_square_4x4.yaml";
   // "/home/tom/src/spin-ed/example/heisenberg_chain_4.yaml";
-config const dataPath = "output.h5";
-config const datasetPath = "/representatives";
+config const hdf5Path = "output.h5";
+config const representativesDataset = "/representatives";
 
-proc real_main() {
-  ls_hs_hdf5_create_dataset_u64(
-    dataPath.c_str(), datasetPath.c_str(), 1, c_ptrTo([10:uint]));
-  var chunk : [0 .. 3] uint(64) = [i in 1:uint .. 4:uint] i;
-  ls_hs_hdf5_write_1d_chunk_u64(
-    dataPath.c_str(), datasetPath.c_str(), 2, chunk.size:uint, c_ptrTo(chunk));
-  // return;
-
+proc constructBasisRepresentatives() {
   const basis = new shared DistributedBasis(yamlPath);
   var timer = new Timer();
   timer.start();
-  var states = makeStates(basis); // new DistributedStates(context);
+  var states = makeStates(basis);
   timer.stop();
   writeln("[Chapel] makeStates took ", timer.elapsed());
-
-  for i in states.representatives.domain.dim(0) {
-    // writeln(states.representatives[i][0 ..# states.counts[i]]);
-    writeln(states.counts[i]);
+  for i in states.representatives.dim(0) {
+    writeln("[Chapel] locale ", i, " contains ", states.counts[i], " states");
   }
+  timer.clear();
+  timer.start();
+  mergeStates(states.representatives, states.counts, hdf5Path,
+    representativesDataset);
+  timer.stop();
+  writeln("[Chapel] mergeStates took ", timer.elapsed());
+}
 
-  mergeStates(states.representatives, states.counts, dataPath, datasetPath);
-  // var edges = computeRanges(states.representatives, states.counts);
-  // for i in edges.domain.dim(0) {
-  //   writeln(edges[i]);
-  // }
 
-  // writeln(states[0].representatives);
-  // writeln(states[1].representatives);
-  // writeln(merge(states[0].representatives, states[1].representatives));
-  // writeln(merge(states[1].representatives, states[0].representatives));
+proc real_main() {
+  constructBasisRepresentatives();
+  // merge_test();
 }
 
 proc main() {
@@ -168,7 +164,6 @@ proc main() {
     ls_enable_logging();
     ls_hs_init();
   }
-  // merge_test();
   real_main();
   for loc in Locales do on loc {
     ls_hs_exit();
