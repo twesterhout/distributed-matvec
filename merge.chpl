@@ -27,12 +27,20 @@ module Merge {
     }
   }
 
+  inline proc indexAccess(const ref chunks, i : int, j : int) {
+    return chunks[i][j];
+  }
+  inline proc indexAccess(const ref chunks : [?D] ?elType, i : int, j : int) {
+    return chunks[i, j];
+  }
+
   inline proc _isLess(const ref a : Node, const ref b : Node,
                       const ref chunks) : bool {
     assert(!a.isEmpty() && !b.isEmpty());
     if a.isInfinity() { return false; }
     if b.isInfinity() { return true; }
-    return chunks[a.chunkIndex][a.indexInChunk] < chunks[b.chunkIndex][b.indexInChunk];
+    return indexAccess(chunks, a.chunkIndex, a.indexInChunk)
+             < indexAccess(chunks, b.chunkIndex, b.indexInChunk);
   }
 
   proc _insert(ref tree: TournamentTree, i : int, const ref node : Node,
@@ -95,7 +103,7 @@ module Merge {
     var tree = _buildTree(chunks, counts);
     var root = _processOne(tree, chunks, counts);
     while (!root.isInfinity()) {
-      yield chunks[root.chunkIndex][root.indexInChunk];
+      yield indexAccess(chunks, root.chunkIndex, root.indexInChunk);
       root = _processOne(tree, chunks, counts);
     }
   }
@@ -110,7 +118,7 @@ module Merge {
     edges[0] = 0;
     edges[edges.size - 1] = states.size;
     for i in 1 .. bounds.size - 2 {
-      // TODO: can be improved by setting stricted bounds where to search
+      // TODO: can be improved by setting stricter bounds where to search
       const (found, location) = binarySearch(states, bounds[i]);
       edges[i] = location;
       // writeln(i, ", ", bounds[i], ", ", found, ", ", location);
@@ -189,13 +197,12 @@ module Merge {
 
   proc merge_test()
   {
-    var chunks: [0 .. 4, 0 .. 3] int = [
-      [45, 47,  0,  0],
-      [0,   0,  0,  0],
-      [4,  15, 16, 19],
-      [17, 82,  0,  0],
-      [0,   0,  0,  0],
-    ];
+    var chunks: [0 .. 4, 0 .. 3] int;
+    chunks[0, ..] = [45, 47,  0,  0];
+    chunks[1, ..] = [0,   0,  0,  0];
+    chunks[2, ..] = [4,  15, 16, 19];
+    chunks[3, ..] = [17, 82,  0,  0];
+    chunks[4, ..] = [0,   0,  0,  0];
     var counts = [2, 0, 4, 2, 1];
     for x in kmerge(chunks, counts) do
       writeln(x);
