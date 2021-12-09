@@ -42,5 +42,9 @@ extern proc ls_hs_destroy_spin_basis(basis: c_ptr(ls_hs_spin_basis_v1));
 extern proc ls_hs_destroy_operator(basis: c_ptr(ls_hs_operator_v1));
 extern proc ls_hs_hdf5_create_dataset_u64(path: c_string,
     dataset: c_string, dim: c_uint, shape: c_ptr(uint(64)));
-extern proc ls_hs_hdf5_write_1d_chunk_u64(path: c_string,
-    dataset: c_string, offset: uint(64), count: uint(64), data: c_ptr(uint(64)));
+extern proc ls_hs_hdf5_create_dataset_f64(path: c_string,
+    dataset: c_string, dim: c_uint, shape: c_ptr(uint(64)));
+extern proc ls_hs_hdf5_write_chunk_u64(path: c_string, dataset: c_string,
+    dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(uint(64)));
+extern proc ls_hs_hdf5_write_chunk_f64(path: c_string, dataset: c_string,
+    dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(real(64)));
