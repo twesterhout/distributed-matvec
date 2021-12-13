@@ -202,6 +202,20 @@ proc _distributeBasedOnHash(const ref states : [] uint(64), const ref array : [?
   return (buffer, offsets);
 }
 
+proc _distributeBasedOnHash(const ref states : [] uint(64), ref timer : Timer) {
+  timer.start();
+  const size = states.size;
+  var buffer : [0 .. numLocales - 1, 0 .. size - 1] uint(64) = noinit;
+  var offsets : [LocaleSpace] int;
+  for i in 0 .. size - 1 {
+    const hash = (hash64_01(states[i]) % numLocales:uint):int;
+    buffer[hash, offsets[hash]] = states[i];
+    offsets[hash] += 1;
+  }
+  timer.stop();
+  return (buffer, offsets);
+}
+
 proc loadArray(filename : string, basisDataset : string, arrayDataset : string,
                type eltType, const ref countPerLocale : [LocaleSpace] int) {
   var _initGlobalBufferTimer = new Timer();
@@ -221,6 +235,15 @@ proc loadArray(filename : string, basisDataset : string, arrayDataset : string,
   var globalBuffer : [OnePerLocale] [0 .. numberVectors - 1, 0 .. maxCountPerLocale - 1] eltType;
   _initGlobalBufferTimer.stop();
   var globalOffsets : [LocaleSpace] int = 0;
+
+  // writeln("globalBuffer.size = ", globalBuffer[0].size);
+  // var otherTimer = new Timer();
+  // otherTimer.start();
+  // forall loc in Locales do on loc {
+  //   globalBuffer[loc.id] = 10.0:eltType;
+  // }
+  // otherTimer.stop();
+  // writeln("[Chapel] loadArray spent ", otherTimer.elapsed(), " filling globalBuffer");
 
   var writeIndex$ : atomic int = 0;
   const workItems = splitIntoChunks(0, totalNumberStates, loadArrayChunkSize / numberVectors);
@@ -262,6 +285,60 @@ proc loadArray(filename : string, basisDataset : string, arrayDataset : string,
     " initializing globalBuffer");
   writeln("[Chapel] loadArray spent ", _readTimer.elapsed(), " reading from HDF5 files");
   writeln("[Chapel] loadArray spent ", _processTimer1.elapsed(), " computing hashes");
+  writeln("[Chapel] loadArray spent ", _processTimer2.elapsed(), " copying stuff around");
+  writeln("[Chapel] loadArray spent ", _copyTimer.elapsed(), " copying to other locales");
+  return globalBuffer;
+}
+
+proc loadStates(filename : string, basisDataset : string,
+                const ref countPerLocale : [LocaleSpace] int) {
+  var _initGlobalBufferTimer = new Timer();
+  var _readTimer : [OnePerLocale] Timer = new Timer();
+  var _processTimer1 : [OnePerLocale] Timer = new Timer();
+  var _processTimer2 : [OnePerLocale] Timer = new Timer();
+  var _copyTimer : [OnePerLocale] Timer = new Timer();
+
+  const totalNumberStates = + reduce countPerLocale;
+  const maxCountPerLocale = max reduce countPerLocale;
+  const basisDatasetShape = datasetShape(filename, basisDataset);
+  assert(basisDatasetShape.size == 1);
+  assert(basisDatasetShape[0] == totalNumberStates);
+  _initGlobalBufferTimer.start();
+  var globalBuffer : [OnePerLocale] [0 .. maxCountPerLocale - 1] uint(64);
+  _initGlobalBufferTimer.stop();
+  var globalOffsets : [LocaleSpace] int = 0;
+
+  var writeIndex$ : atomic int = 0;
+  const workItems = splitIntoChunks(0, totalNumberStates, loadArrayChunkSize);
+  coforall loc in Locales
+    with (/*const*/ in workItems,
+          in filename,
+          in basisDataset) do on loc {
+    for ((lo, hi), chunkIndex) in zip(workItems, 0..) do if (chunkIndex % numLocales == loc.id) {
+      _readTimer[loc.id].start();
+      const size = hi - lo;
+      const statesChunk = readHDF5Chunk(filename, basisDataset, uint(64), (lo,), (size,));
+      _readTimer[loc.id].stop();
+      const (localBuffer, localOffsets) =
+        _distributeBasedOnHash(statesChunk, _processTimer2[loc.id]);
+
+      _copyTimer[loc.id].start();
+      writeIndex$.waitFor(chunkIndex);
+      forall i in 0 .. numLocales - 1 {
+        const _start = globalOffsets[i];
+        const _size = localOffsets[i];
+        globalBuffer[i][_start ..# _size] = localBuffer[i, 0 ..# _size];
+        globalOffsets[i] += _size;
+      }
+      writeIndex$.add(1);
+      _copyTimer[loc.id].stop();
+    }
+  }
+
+  writeln("[Chapel] loadArray spent ", _initGlobalBufferTimer.elapsed(),
+    " initializing globalBuffer");
+  writeln("[Chapel] loadArray spent ", _readTimer.elapsed(), " reading from HDF5 files");
+  // writeln("[Chapel] loadArray spent ", _processTimer1.elapsed(), " computing hashes");
   writeln("[Chapel] loadArray spent ", _processTimer2.elapsed(), " copying stuff around");
   writeln("[Chapel] loadArray spent ", _copyTimer.elapsed(), " copying to other locales");
   return globalBuffer;
@@ -357,6 +434,12 @@ proc constructBasisRepresentatives() {
     real, numberPerLocale);
   loadArrayTimer.stop();
   writeln("[Chapel] loadArray took ", loadArrayTimer.elapsed());
+
+  var loadStatesTimer = new Timer();
+  loadStatesTimer.start();
+  var states = loadStates(testPath, "/basis/representatives", numberPerLocale);
+  loadStatesTimer.stop();
+  writeln("[Chapel] loadStates took ", loadStatesTimer.elapsed());
 
 
   // for i in LocaleSpace {
