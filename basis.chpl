@@ -84,7 +84,8 @@ proc _makeDomain(shape : 2 * int) : domain(2) {
 proc readHDF5Chunk(filename : string, dataset : string, type eltType, offset, shape) {
   const dom = _makeDomain(shape);
   var array : [dom] eltType;
-  return readHDF5Chunk(filename, dataset, offset, array);
+  readHDF5Chunk(filename, dataset, offset, array);
+  return array;
 }
 
 proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltType) {
@@ -107,148 +108,162 @@ proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltT
   else {
     assert(false);
   }
-  return array;
+  // return array;
 }
 
+config const loadArrayChunkSize : int = 10 * 1024 * 1024 / numLocales;
 
-record _StatesChunk { 
-  var lock$ : atomic bool;
-  var dom : domain(1);
-  var buffer : [dom] uint(64);
-  var size : int;
-
-  proc init(chunkSize : int) {
-    this.dom = {0 .. chunkSize - 1};
-    this.size = chunkSize;
-  }
-
-  proc lock() { while this.lock$.testAndSet() do chpl_task_yield(); }
-  proc unlock() { this.lock$.clear(); }
-  proc isLocked() { return this.lock$.read(); }
-}
-
-proc histogramFromChunk(const ref array : [] uint(64)) {
+proc _histogramFromChunk(const ref array : [] uint(64), ref timer : Timer) {
+  timer.start();
   var histogram : [LocaleSpace] int = 0;
   forall x in array with (+ reduce histogram) {
     const hash = (hash64_01(x) % numLocales:uint):int;
     histogram[hash] += 1;
   }
+  timer.stop();
   return histogram;
 }
-proc histogramFromChunk(const ref chunk : _StatesChunk) {
-  assert(chunk.isLocked());
-  const needCopy = chunk.buffer.locale != here.locale;
-  if (needCopy) {
-    var localBuffer = chunk.buffer[0 .. chunk.size - 1];
-    return histogramFromChunk(localBuffer);
-  }
-  return histogramFromChunk(chunk.buffer[0 .. chunk.size - 1]);
-}
-
-proc lockNextChunk(const ref chunks : [?D] _StatesChunk) {
-  var iteration = 0;
-  while (true) {
-    for i in D {
-      if (!chunks[i].isLocked()) {
-        chunks[i].lock();
-        return i;
-      }
-    }
-    iteration += 1;
-    if (iteration >= 5) {
-      sleep(1, TimeUnits.milliseconds);
-    }
-    else {
-      chpl_task_yield();
-    }
-  }
-  halt("unreachable");
-}
-
-config const readingChunkSize = 1024 * 1024;
 
 proc calculateNumberStatesPerLocale(filename : string, dataset : string) {
-  var timer = new Timer();
-  var readTimer = new Timer();
-  var timeReading : real = 0;
-  timer.start();
+  var _totalTimer = new Timer();
+  var _readingTimer : [OnePerLocale] Timer = new Timer();
+  var _histogramTimer : [OnePerLocale] Timer = new Timer();
+  _totalTimer.start();
+
   const shape = datasetShape(filename, dataset);
   assert(shape.rank == 1);
   const totalNumberStates = shape[0];
-  const chunkSize = min(readingChunkSize, totalNumberStates);
-
-  var chunks : [LocaleSpace] _StatesChunk = new _StatesChunk(chunkSize);
-  for chunk in chunks { assert(!chunks.isLocked()); }
-  var histogram : [0 .. numLocales - 1, 0 .. numLocales - 1] int;
-  var offset = 0;
-  while (offset < totalNumberStates) {
-    const count = min(chunkSize, totalNumberStates - offset);
-    const localeIndex = lockNextChunk(chunks);
-    ref chunk = chunks[localeIndex];
-
-    // readTimer.clear();
-    readTimer.start();
-    readHDF5Chunk(filename, dataset, (offset,), chunk.buffer[0 .. count - 1]);
-    readTimer.stop();
-    // timeReading += readTimer.elapsed();
-
-    chunk.size = count;
-    begin with (ref chunk) {
-      on Locales[localeIndex] {
-        histogram[localeIndex, ..] += histogramFromChunk(chunk);
-      }
-      chunk.unlock();
+  var histogram : [0 .. numLocales - 1] int;
+  const workItems = splitIntoChunks(0, totalNumberStates, loadArrayChunkSize);
+  coforall loc in Locales
+      with (/*const*/ in workItems, in filename, in dataset,
+            + reduce histogram) do on loc {
+    for ((lo, hi), chunkIndex) in zip(workItems, 0..) do if (chunkIndex % numLocales == loc.id) {
+      _readingTimer[loc.id].start();
+      const size = hi - lo;
+      const statesChunk = readHDF5Chunk(filename, dataset, uint(64), (lo,), (size,));
+      _readingTimer[loc.id].stop();
+      histogram += _histogramFromChunk(statesChunk, _histogramTimer[loc.id]);
     }
-    offset += count;
   }
-  for chunk in chunks { chunk.lock(); chunk.unlock(); } // wait for all tasks to complete
+  assert(+ reduce histogram == totalNumberStates);
+  _totalTimer.stop();
+  writeln("[Chapel] calculateNumberStatesPerLocale spent ", _readingTimer.elapsed(),
+    " reading HDF5 files");
+  writeln("[Chapel] calculateNumberStatesPerLocale spent ", _histogramTimer.elapsed(),
+    " computing histograms");
+  writeln("[Chapel] calculateNumberStatesPerLocale took ", _totalTimer.elapsed());
+  return histogram;
+}
 
-  assert(offset == totalNumberStates);
-  var finalHistogram : [LocaleSpace] int;
-  for j in LocaleSpace {
-    finalHistogram[j] = + reduce [i in LocaleSpace] histogram[i, j];
+// MemoryInitialization; moveInitialize
+// std::vector x{{1, 2, 3}};
+
+proc splitIntoChunks(lower : int, upper : int, chunkSize : int) {
+  assert(upper >= lower);
+  assert(chunkSize >= 1);
+  const numChunks = (upper - lower + (chunkSize - 1)) / chunkSize;
+  var chunks : [0 .. numChunks - 1] (int, int); // = noinit;
+  var offset = lower;
+  for i in 0 .. numChunks - 1 {
+    const nextOffset = min(offset + chunkSize, upper);
+    chunks[i] = (offset, nextOffset);
+    offset = nextOffset;
   }
-  writeln(finalHistogram);
-  assert(+ reduce finalHistogram == totalNumberStates);
+  return chunks;
+}
+
+proc _computeHashes(const ref states : [] uint(64), ref timer : Timer) {
+  timer.start();
+  var hashes : [states.domain] int = noinit;
+  forall i in vectorizeOnly(states.domain) {
+    hashes[i] = (hash64_01(states[i]) % numLocales:uint):int;
+  }
   timer.stop();
-  writeln("[Chapel] calculateNumberStatesPerLocale took ", timer.elapsed());
-  writeln("[Chapel] timeReading ", readTimer.elapsed());
-  return finalHistogram;
+  return hashes;
+}
+
+proc _distributeBasedOnHash(const ref states : [] uint(64), const ref array : [?D] ?eltType,
+                            const ref hashes : [] int, ref timer : Timer) where (D.rank == 2) {
+  timer.start();
+  const numVectors = D.dim(0).size;
+  const size = D.dim(1).size;
+  assert(states.size == size);
+  var buffer : [0 .. numLocales - 1, 0 .. size - 1, 0 .. numVectors - 1] eltType = noinit;
+  var offsets : [LocaleSpace] int;
+  for i in 0 .. size - 1 {
+    const hash = hashes[i];
+    for k in 0 .. numVectors - 1 {
+      buffer[hash, offsets[hash], k] = array[k, i];
+    }
+    offsets[hash] += 1;
+  }
+  timer.stop();
+  return (buffer, offsets);
 }
 
 proc loadArray(filename : string, basisDataset : string, arrayDataset : string,
-               type eltType, countPerLocale : [LocaleSpace] int) {
+               type eltType, const ref countPerLocale : [LocaleSpace] int) {
+  var _initGlobalBufferTimer = new Timer();
+  var _readTimer : [OnePerLocale] Timer = new Timer();
+  var _processTimer1 : [OnePerLocale] Timer = new Timer();
+  var _processTimer2 : [OnePerLocale] Timer = new Timer();
+  var _copyTimer : [OnePerLocale] Timer = new Timer();
+
   const totalNumberStates = + reduce countPerLocale;
   const maxCountPerLocale = max reduce countPerLocale;
   const arrayDatasetShape = datasetShape(filename, arrayDataset);
   assert(arrayDatasetShape.size == 2);
   assert(arrayDatasetShape[1] == totalNumberStates);
   const numberVectors = arrayDatasetShape[0];
-
+  // TODO: initialization of globalBuffer is quite a bit of time
+  _initGlobalBufferTimer.start();
   var globalBuffer : [OnePerLocale] [0 .. numberVectors - 1, 0 .. maxCountPerLocale - 1] eltType;
+  _initGlobalBufferTimer.stop();
   var globalOffsets : [LocaleSpace] int = 0;
 
-  const numChunks = max(1, totalNumberStates / (numLocales * numLocales));
-  for r in chunks(0 ..< totalNumberStates, numChunks) {
-    const statesChunk = readHDF5Chunk(filename, basisDataset, uint(64),
-                                      (r.first,), (r.size,));
-    const arrayChunk = readHDF5Chunk(filename, arrayDataset, eltType,
-                                     (0, r.first), (numberVectors, r.size));
-    var localBuffer : [0 .. numLocales - 1, 0 .. numberVectors - 1, 0 .. r.size - 1] eltType;
-    var localOffsets : [LocaleSpace] int;
-    for i in 0 .. r.size - 1 {
-      const hash = (hash64_01(statesChunk[i]) % numLocales:uint):int;
-      localBuffer[hash, .., localOffsets[hash]] = arrayChunk[.., i];
-      localOffsets[hash] += 1;
-    }
-    for i in 0 .. numLocales - 1 {
-      const start = globalOffsets[i];
-      const size = localOffsets[i];
-      globalBuffer[i][.., start ..# size] = localBuffer[i, .., 0 ..# size];
-      globalOffsets[i] += size;
+  var writeIndex$ : atomic int = 0;
+  const workItems = splitIntoChunks(0, totalNumberStates, loadArrayChunkSize / numberVectors);
+  coforall loc in Locales
+    with (/*const*/ in workItems,
+          in filename,
+          in basisDataset,
+          in arrayDataset) do on loc {
+    for ((lo, hi), chunkIndex) in zip(workItems, 0..) do if (chunkIndex % numLocales == loc.id) {
+      _readTimer[loc.id].start();
+      const size = hi - lo;
+      const statesChunk = readHDF5Chunk(filename, basisDataset, uint(64), (lo,), (size,));
+      const arrayChunk = readHDF5Chunk(filename, arrayDataset, eltType,
+                                       (0, lo), (numberVectors, size));
+      _readTimer[loc.id].stop();
+      const localHashes = _computeHashes(statesChunk, _processTimer1[loc.id]);
+      const (localBuffer, localOffsets) =
+        _distributeBasedOnHash(statesChunk, arrayChunk, localHashes, _processTimer2[loc.id]);
+
+      _copyTimer[loc.id].start();
+      // Comm diagnostics
+      // auto aggregation (only with forall loops with scalars)
+      // --report-auto-aggregation
+      writeIndex$.waitFor(chunkIndex);
+      forall i in 0 .. numLocales - 1 {
+        const _start = globalOffsets[i];
+        const _size = localOffsets[i];
+        for k in 0 ..# numberVectors {
+          globalBuffer[i][k, _start ..# _size] = localBuffer[i, 0 ..# _size, k];
+        }
+        globalOffsets[i] += _size;
+      }
+      writeIndex$.add(1);
+      _copyTimer[loc.id].stop();
     }
   }
 
+  writeln("[Chapel] loadArray spent ", _initGlobalBufferTimer.elapsed(),
+    " initializing globalBuffer");
+  writeln("[Chapel] loadArray spent ", _readTimer.elapsed(), " reading from HDF5 files");
+  writeln("[Chapel] loadArray spent ", _processTimer1.elapsed(), " computing hashes");
+  writeln("[Chapel] loadArray spent ", _processTimer2.elapsed(), " copying stuff around");
+  writeln("[Chapel] loadArray spent ", _copyTimer.elapsed(), " copying to other locales");
   return globalBuffer;
 }
 
@@ -335,13 +350,19 @@ proc constructBasisRepresentatives() {
   // }
 
   var numberPerLocale = calculateNumberStatesPerLocale(testPath, "/basis/representatives");
+
+  var loadArrayTimer = new Timer();
+  loadArrayTimer.start();
   var vectors = loadArray(testPath, "/basis/representatives", "/hamiltonian/eigenvectors",
     real, numberPerLocale);
+  loadArrayTimer.stop();
+  writeln("[Chapel] loadArray took ", loadArrayTimer.elapsed());
 
-  for i in LocaleSpace {
-    writeln(vectors[i]);
-    writeln("---------");
-  }
+
+  // for i in LocaleSpace {
+  //   writeln(vectors[i]);
+  //   writeln("---------");
+  // }
   // var vectors : [OnePerLocale] [0 .. 2 - 1, 0 .. states.size - 1] real(64);
   // forall i in OnePerLocale {
   //   on Locales[i] {
