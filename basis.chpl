@@ -54,7 +54,30 @@ class DistributedBasis {
     }
     return (lower, upper);
   }
-};
+}
+
+class DistributedOperator {
+  var _localOperators : [OnePerLocale] ls_hs_operator_v1;
+
+  proc init(path: string) {
+    this._localOperators = [loc in Locales] new ls_hs_operator_v1(nil, nil);
+    complete();
+
+    coforall loc in Locales do on loc {
+      const localPath = path;
+      var dummyBasis = new ls_hs_spin_basis_v1(nil, nil);
+      ls_hs_basis_and_hamiltonian_from_yaml(
+        localPath.c_str(), c_ptrTo(dummyBasis), c_ptrTo(this._localOperators[loc.id]));
+      ls_hs_destroy_spin_basis(c_ptrTo(dummyBasis));
+    }
+  }
+
+  proc deinit() {
+    coforall loc in Locales do on loc {
+      ls_hs_destroy_operator(c_ptrTo(this._localOperators[loc.id]));
+    }
+  }
+}
 
 class BasisStates {
   var size : int;
@@ -193,9 +216,20 @@ proc _distributeBasedOnHash(const ref states : [] uint(64), const ref array : [?
   var offsets : [LocaleSpace] int;
   for i in 0 .. size - 1 {
     const hash = hashes[i];
+    // ref dest = buffer[hash, offsets[hash], ..];
+    // const ref src = array[.., i];
+    // for k in 0 .. numVectors - 1 {
+    //   buffer[hash, offsets[hash], k] = array[k, i];
+    // }
+    // ==> 0.876606 0.888626 0.850986 0.829717
     for k in 0 .. numVectors - 1 {
       buffer[hash, offsets[hash], k] = array[k, i];
     }
+    // ==> 36.7382 29.0505 25.9959 26.0736
+    // buffer[hash, offsets[hash], ..] = array[.., i];
+    // ==> 18.815 0.0 0.0 0.0 (for a file 2^6 times smaller)
+    // dest = src;
+    // 8.57173 0.0 0.0 0.0
     offsets[hash] += 1;
   }
   timer.stop();
@@ -277,6 +311,73 @@ proc loadArray(filename : string, basisDataset : string, arrayDataset : string,
         globalOffsets[i] += _size;
       }
       writeIndex$.add(1);
+      _copyTimer[loc.id].stop();
+    }
+  }
+
+  writeln("[Chapel] loadArray spent ", _initGlobalBufferTimer.elapsed(),
+    " initializing globalBuffer");
+  writeln("[Chapel] loadArray spent ", _readTimer.elapsed(), " reading from HDF5 files");
+  writeln("[Chapel] loadArray spent ", _processTimer1.elapsed(), " computing hashes");
+  writeln("[Chapel] loadArray spent ", _processTimer2.elapsed(), " copying stuff around");
+  writeln("[Chapel] loadArray spent ", _copyTimer.elapsed(), " copying to other locales");
+  return globalBuffer;
+}
+
+proc loadArraySimple(filename : string, basisDataset : string, arrayDataset : string,
+                     type eltType, const ref countPerLocale : [LocaleSpace] int) {
+  var _initGlobalBufferTimer = new Timer();
+  var _readTimer : [OnePerLocale] Timer = new Timer();
+  var _processTimer1 : [OnePerLocale] Timer = new Timer();
+  var _processTimer2 : [OnePerLocale] Timer = new Timer();
+  var _copyTimer : [OnePerLocale] Timer = new Timer();
+
+  const totalNumberStates = + reduce countPerLocale;
+  const maxCountPerLocale = max reduce countPerLocale;
+  const arrayDatasetShape = datasetShape(filename, arrayDataset);
+  assert(arrayDatasetShape.size == 2);
+  assert(arrayDatasetShape[1] == totalNumberStates);
+  const numberVectors = arrayDatasetShape[0];
+  // TODO: initialization of globalBuffer is quite a bit of time
+  _initGlobalBufferTimer.start();
+  var globalBuffer : [OnePerLocale] [0 .. numberVectors - 1, 0 .. maxCountPerLocale - 1] eltType;
+  _initGlobalBufferTimer.stop();
+
+  coforall loc in Locales do on loc {
+    const workItems = splitIntoChunks(0, totalNumberStates, loadArrayChunkSize / numberVectors);
+    var globalOffset : int = 0;
+    for (lo, hi) in workItems {
+      _readTimer[loc.id].start();
+      const size = hi - lo;
+      const statesChunk = readHDF5Chunk(filename, basisDataset, uint(64), (lo,), (size,));
+      const arrayChunk = readHDF5Chunk(filename, arrayDataset, eltType,
+                                       (0, lo), (numberVectors, size));
+      _readTimer[loc.id].stop();
+      _processTimer1[loc.id].start();
+      var mask : [statesChunk.domain] bool = noinit;
+      forall i in 0 ..# size {
+        mask[i] = (hash64_01(statesChunk[i]) % numLocales:uint):int == loc.id;
+      }
+      _processTimer1[loc.id].stop();
+
+      _copyTimer[loc.id].start();
+      forall k in 0 ..# numberVectors {
+        var offset = globalOffset;
+        for i in 0 ..# size {
+          if (mask[i]) {
+              globalBuffer[loc.id][k, offset] = arrayChunk[k, i];
+              offset += 1;
+          }
+        }
+      }
+      // for i in 0 ..# size {
+      //   if (mask[i]) {
+      //     for k in 0 ..# numberVectors {
+      //       globalBuffer[loc.id][k, globalOffset] = arrayChunk[k, i];
+      //       globalOffset += 1;
+      //     }
+      //   }
+      // }
       _copyTimer[loc.id].stop();
     }
   }
@@ -435,11 +536,18 @@ proc constructBasisRepresentatives() {
   loadArrayTimer.stop();
   writeln("[Chapel] loadArray took ", loadArrayTimer.elapsed());
 
-  var loadStatesTimer = new Timer();
-  loadStatesTimer.start();
-  var states = loadStates(testPath, "/basis/representatives", numberPerLocale);
-  loadStatesTimer.stop();
-  writeln("[Chapel] loadStates took ", loadStatesTimer.elapsed());
+  loadArrayTimer.clear();
+  loadArrayTimer.start();
+  var vectors2 = loadArraySimple(testPath, "/basis/representatives", "/hamiltonian/eigenvectors",
+    real, numberPerLocale);
+  loadArrayTimer.stop();
+  writeln("[Chapel] loadArray took ", loadArrayTimer.elapsed());
+
+  // var loadStatesTimer = new Timer();
+  // loadStatesTimer.start();
+  // var states = loadStates(testPath, "/basis/representatives", numberPerLocale);
+  // loadStatesTimer.stop();
+  // writeln("[Chapel] loadStates took ", loadStatesTimer.elapsed());
 
 
   // for i in LocaleSpace {
