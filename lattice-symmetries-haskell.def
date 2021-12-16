@@ -1,0 +1,50 @@
+Bootstrap: localimage
+From: ghc-8.10.4.sif
+
+%files
+    hdf5-1.12.1.tar.bz2 /opt/tmp/
+
+%post -c /bin/bash
+    set -eu
+    set -o pipefail
+
+    apt-get clean
+    apt-get update
+    apt-get install -y --no-install-recommends --no-install-suggests \
+        git cmake pkg-config ninja-build libnuma-dev zlib1g-dev bzip2 \
+        libgmp-dev
+    rm -rf /var/lib/apt/lists/*
+
+    # Building HDF5
+    cd /opt/tmp
+    tar -xf hdf5-1.12.1.tar.bz2
+    cd hdf5-1.12.1
+    ./configure --prefix=/usr/lib/x86_64-linux-gnu/ \
+        --without-java --without-fortran --without-cxx \
+        --disable-tests --disable-tools
+    make -j $(nproc --all) install
+
+    # Building C++ code
+    cd /opt
+    git clone https://github.com/twesterhout/lattice-symmetries.git
+    cd lattice-symmetries
+    git submodule update --init
+    mkdir prefix
+    cmake -GNinja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_SHARED_LIBS=OFF \
+          -DCMAKE_INSTALL_PREFIX=$PWD/prefix \
+          -DLatticeSymmetries_ENABLE_UNIT_TESTING=OFF \
+          -DLatticeSymmetries_ENABLE_PROFILING=OFF \
+          -S . -B build
+    cmake --build build --target install
+
+    # Building Haskell code
+    cd /opt
+    git clone https://github.com/twesterhout/lattice-symmetries-haskell.git
+    cd lattice-symmetries-haskell
+    export PKG_CONFIG_PATH=/opt/lattice-symmetries/prefix/lib/pkgconfig
+    export GHCUP_INSTALL_BASE_PREFIX=/opt
+    export CABAL_DIR=/opt/.cabal
+    export PATH="$CABAL_DIR/.cabal/bin:$GHCUP_INSTALL_BASE_PREFIX/.ghcup/bin:$PATH"
+    cabal new-build --only-dependencies
