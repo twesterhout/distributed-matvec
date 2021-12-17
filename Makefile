@@ -41,6 +41,22 @@ merge: merge.chpl
 junk: junk.chpl
 	chpl --debug -o $@ $^
 
+main: main.c
+	gcc -o $@ \
+		-Ithird_party/include \
+		$< \
+		-pthread \
+		-fopenmp \
+		-Lthird_party/lib \
+		-llattice_symmetries_haskell \
+		-llattice_symmetries \
+		-lgmp \
+		-lnuma \
+		-lm \
+		-lz \
+		-ldl \
+		-lutil
+
 # -include lib/Makefile.basis
 # main: main.c basis
 # 	$(CHPL_COMPILER) $(CHPL_CFLAGS) -o $@ $< $(CHPL_LDFLAGS)
@@ -51,40 +67,36 @@ junk: junk.chpl
 error: error.chpl
 	chpl -o $@ $^
 
-OMPI_VERSION = 4.1.1
-GHC_VERSION = 8.10.4
+.PHONY: dependencies
+dependencies: assets/third_party.tar.bz2
+	tar -xf $<
 
-ompi: ompi-$(OMPI_VERSION).sif
-ghc: ghc-$(GHC_VERSION).sif
-lattice-symmetries-haskell: lattice-symmetries-haskell.sif
+ghc-8.10.7.sif: ghc-8.10.7.def
+	singularity build --fakeroot --force --no-cleanup $@ $<
 
-ompi-$(OMPI_VERSION).sif: ompi-$(OMPI_VERSION).def
-	mkdir -p tmp
-	TMPDIR=$(PWD)/tmp singularity build --fakeroot $@ $^
+01_ghc.sif: 01_ghc.def
+	singularity build --fakeroot --force $@ $<
 
-ghc-$(GHC_VERSION).sif: ghc-$(GHC_VERSION).def
-	mkdir -p tmp
-	TMPDIR=$(PWD)/tmp singularity build --force --fakeroot $@ $^
+02_hdf5.sif: 02_hdf5.def
+	singularity build --fakeroot --force $@ $<
 
-lattice-symmetries-haskell.sif: lattice-symmetries-haskell.def
-	mkdir -p tmp
-	TMPDIR=$(PWD)/tmp singularity build --force --fakeroot $@ $^
+assets/hdf5.tar.bz2: 02_hdf5.sif
+	singularity run --bind assets:/prefix $<
 
-lattice-symmetries-haskell-library: lattice-symmetries-haskell-library.sif
-lattice-symmetries-haskell-library.sif: lattice-symmetries-haskell-library.def
-	mkdir -p tmp
-	TMPDIR=$(PWD)/tmp singularity build --force --fakeroot $@ $^
+03_lattice-symmetries.sif: 03_lattice-symmetries.def
+	singularity build --fakeroot --force $@ $<
 
-# lib/libstates.a: states.chpl libplugin.a
-# 	chpl --static --library --library-makefile -L. -lplugin $(LDFLAGS) plugin.h $<
+assets/lattice-symmetries.tar.bz2: 03_lattice-symmetries.sif
+	singularity run --bind assets:/prefix $<
 
-# foo: foo.chpl
-# 	chpl --static --library --library-makefile $<
+04_haskell.sif: 04_haskell.def assets/hdf5.tar.bz2 assets/lattice-symmetries.tar.bz2
+	singularity build --fakeroot --force $@ $<
 
-# include lib/Makefile.foo
+05_dependencies.sif: 05_dependencies.def 04_haskell.sif
+	singularity build --fakeroot --force --no-cleanup $@ $<
 
-# bar: bar.c lib/libfoo.a
-# 	$(CHPL_COMPILER) $(CHPL_CFLAGS) -o $@ $< $(CHPL_LDFLAGS)
+assets/third_party.tar.bz2: 05_dependencies.sif
+	singularity run --bind assets:/prefix $<
 
 .PHONY: clean
 clean:
