@@ -9,6 +9,16 @@ wget https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.1-
 tar -xf third_party.tar.bz2
 ```
 
+Shared libraries in `third_party/lib` depend on the following system libraries:
+
+  * libc (GLIBC >= 2.12)
+  * libgomp (GOMP >= 4.5)
+  * libnuma
+  * libz
+  * libutil *(you probably already have it)*
+  * libm *(you probably already have it)*
+  * libdl *(you probably already have it)*
+
 ### Building from source
 
 Alternatively, you can generate `third_party.tar.bz2` manually. For this you will need [Singularity](https://sylabs.io/).
