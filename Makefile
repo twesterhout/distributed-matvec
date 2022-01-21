@@ -1,7 +1,7 @@
 .POSIX:
 
 CFLAGS = -I/home/tom/src/lattice-symmetries-haskell/cbits `pkg-config --cflags lattice_symmetries`
-LDFLAGS = -L/home/tom/src/lattice-symmetries-haskell/build -llattice_symmetries_haskell `pkg-config --libs lattice_symmetries` 
+LDFLAGS = -L/home/tom/src/lattice-symmetries-haskell/build -llattice_symmetries_haskell `pkg-config --libs lattice_symmetries`
 
 all: basis
 
@@ -18,6 +18,20 @@ all: basis
 # basis: lib/libbasis.a
 # lib/libbasis.a: basis.chpl states.chpl
 # 	chpl $(CFLAGS) --library --static --library-makefile -o basis $^ $(LDFLAGS) 
+
+test_basis_construction: test_basis_construction.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl
+	# CHPL_TARGET_CPU=native chpl $(CFLAGS) --fast --vectorize -o $@ $^ $(LDFLAGS) 
+	CHPL_TARGET_CPU=native chpl \
+		-Ithird_party/include \
+		--debug -o $@ $^ \
+		--main-module $@ \
+		-Lthird_party/lib \
+		-llattice_symmetries_haskell \
+		-llattice_symmetries \
+		`pkg-config --libs hdf5` -lhdf5_hl \
+		-lutil \
+		-lgomp \
+		-lpthread
 
 basis: basis.chpl states.chpl merge.chpl
 	# CHPL_TARGET_CPU=native chpl $(CFLAGS) --fast --vectorize -o $@ $^ $(LDFLAGS) 

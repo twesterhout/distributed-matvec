@@ -13,9 +13,11 @@ for numLocales in 1 2 3 4; do
     "heisenberg_square_5x5.yaml" \
     "heisenberg_triangular_19.yaml"; do
 
-    referenceOutput="$PREFIX/data/${yamlPath%.yaml}.h5"
-    ./basis -nl $numLocales --yamlPath "$PREFIX/$yamlPath" --hdf5Path "output.h5"
-    h5diff "output.h5" "$referenceOutput" \
-      "/representatives" "/basis/representatives"
+    ./test_basis_construction -nl $numLocales \
+      --kInputBasisPath "$PREFIX/$yamlPath" \
+      --kInputDataPath "$PREFIX/data/${yamlPath%.yaml}.h5" \
+      --kOutputDataPath "output.h5"
+    # h5diff "output.h5" "$referenceOutput" \
+    #   "/representatives" "/basis/representatives"
   done
 done

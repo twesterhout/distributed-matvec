@@ -92,6 +92,7 @@ class BasisStates {
 //   return numLocales;
 // }
 
+/*
 proc datasetShape(filename : string, dataset : string) {
   const rank = ls_hs_hdf5_get_dataset_rank(filename.c_str(), dataset.c_str()):int;
   var c_shape : [0 .. rank - 1] uint(64);
@@ -133,6 +134,7 @@ proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltT
   }
   // return array;
 }
+*/
 
 config const loadArrayChunkSize : int = 10 * 1024 * 1024 / numLocales;
 

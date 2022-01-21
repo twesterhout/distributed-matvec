@@ -28,16 +28,16 @@ module Merge {
     }
   }
 
-  inline proc indexAccess(const ref chunks, i : int, j : int) {
+  private inline proc indexAccess(const ref chunks, i : int, j : int) {
     return chunks[i][j];
   }
-  inline proc indexAccess(const ref chunks : [?D] ?eltType, i : int, j : int)
+  private inline proc indexAccess(const ref chunks : [?D] ?eltType, i : int, j : int)
       where (D.rank == 2) {
     return chunks[i, j];
   }
 
-  inline proc _isLess(const ref a : Node, const ref b : Node,
-                      const ref chunks) : bool {
+  private inline proc _isLess(const ref a : Node, const ref b : Node,
+                              const ref chunks) : bool {
     assert(!a.isEmpty() && !b.isEmpty());
     if a.isInfinity() { return false; }
     if b.isInfinity() { return true; }
@@ -45,8 +45,8 @@ module Merge {
              < indexAccess(chunks, b.chunkIndex, b.indexInChunk);
   }
 
-  proc _insert(ref tree: TournamentTree, i : int, const ref node : Node,
-               const ref chunks) : void {
+  private proc _insert(ref tree: TournamentTree, i : int, const ref node : Node,
+                       const ref chunks) : void {
     assert(i != -1);
     assert(!node.isEmpty());
     if (tree.nodes[i].isEmpty()) { tree.nodes[i] = node; }
@@ -62,21 +62,21 @@ module Merge {
       }
     }
   }
-  inline proc _insert(ref tree: TournamentTree, const ref node : Node,
-                      const ref chunks) : void {
+  private inline proc _insert(ref tree: TournamentTree, const ref node : Node,
+                              const ref chunks) : void {
     _insert(tree, node.outerParentIndex, node, chunks);
   }
 
-  inline proc _makeNode(chunkIndex : int, in indexInChunk : int,
-                        outerParentIndex : int, const ref chunks,
-                        const ref counts) {
+  private inline proc _makeNode(chunkIndex : int, in indexInChunk : int,
+                                outerParentIndex : int, const ref chunks,
+                                const ref counts) {
     if chunkIndex >= chunks.dim(0).size || indexInChunk >= counts[chunkIndex] {
       indexInChunk = -1;
     }
     return new Node(chunkIndex, indexInChunk, outerParentIndex);
   }
 
-  proc _buildTree(const ref chunks, const ref counts) {
+  private proc _buildTree(const ref chunks, const ref counts) {
     const numberChunks = chunks.dim(0).size + (chunks.dim(0).size % 2);
     var tree = new TournamentTree(numberChunks);
     for i in 0 .. numberChunks / 2 - 1 {
@@ -91,7 +91,7 @@ module Merge {
     return tree;
   }
 
-  proc _processOne(ref tree : TournamentTree, const ref chunks, const ref counts) {
+  private proc _processOne(ref tree : TournamentTree, const ref chunks, const ref counts) {
     const result = tree.nodes[0];
     if (result.isInfinity()) { return result; }
     tree.nodes[0] = new Node(-1, -1, -1);
@@ -116,62 +116,7 @@ module Merge {
     }
   }
 
-  proc indicesForBounds(states : [] ?eltType, bounds: list(?eltType2)) {
-    assert(eltType == eltType2);
-    assert(states.size > 0 && bounds.size > 1);
-    assert(bounds[0] <= states[0]);
-    assert(bounds[bounds.size - 1] >= states[states.size - 1]);
-
-    var edges : [0 .. bounds.size - 1] int;
-    edges[0] = 0;
-    edges[edges.size - 1] = states.size;
-    for i in 1 .. bounds.size - 2 {
-      // TODO: can be improved by setting stricter bounds where to search
-      const (found, location) = binarySearch(states, bounds[i]);
-      edges[i] = location;
-      // writeln(i, ", ", bounds[i], ", ", found, ", ", location);
-    }
-    // writeln(states, ", ", bounds, " -> ", edges);
-    return edges;
-  }
-
-  proc computeRanges(const ref states, const ref counts : [] int) {
-    assert(states.domain.dim(0) == counts.domain.dim(0));
-    const D1 = states.domain.dim(0);
-    const lower = min reduce [i in D1] states[i][0];
-    const upper = max reduce [i in D1] states[i][counts[i] - 1];
-    const maxCount = max reduce counts;
-    const chunkSize = max(counts[0] / (5 * numLocales), 1);
-
-    var bounds : list(uint(64));
-    bounds.append(lower);
-    var offset = chunkSize;
-    while (offset < counts[0]) {
-      bounds.append(states[0][offset]);
-      offset += chunkSize;
-    }
-    bounds.append(upper);
-    // writeln("bounds: ", bounds);
-
-    var edges : [0 .. D1.size - 1, 0 .. bounds.size - 1] int;
-    for i in D1 do on counts[i] {
-      edges[i, ..] = indicesForBounds(states[i][0 .. counts[i] - 1], bounds);
-    }
-
-    return edges;
-  }
-
-  proc computeOffsets(indexEdges : [?D] int) where (D.rank == 2) {
-    const numberRanges = indexEdges.dim(1).size - 1;
-    var offsets : [0 .. numberRanges] uint(64);
-    offsets[0] = 0;
-    for j in 1 .. numberRanges {
-      const n = (+ reduce [i in indexEdges.dim(0)] indexEdges[i, j] - indexEdges[i, j - 1]);
-      offsets[j] = offsets[j - 1] + n:uint;
-    }
-    return offsets;
-  }
-
+  /*
   proc mergeStates(const ref states, const ref counts : [] int,
                    filename: string, dataset: string) {
     // Prepare the output file
@@ -213,35 +158,6 @@ module Merge {
       var c_shape = localCount;
       ls_hs_hdf5_write_chunk_u64(filename.c_str(), dataset.c_str(),
         1, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(combinedLocalStates));
-    }
-  }
-
-  proc createHDF5Dataset(filename : string, dataset : string, type eltType, shape) {
-    var c_shape : [0 .. shape.size - 1] uint(64) = noinit;
-    for i in 0 .. shape.size - 1 { c_shape[i] = shape[i]:uint; }
-
-    if (eltType == real(64)) {
-      ls_hs_hdf5_create_dataset_f64(filename.c_str(), dataset.c_str(),
-        c_shape.size:c_uint, c_ptrTo(c_shape));
-    }
-    else {
-      assert(false);
-    }
-  }
-
-  proc writeHDF5Chunk(filename : string, dataset : string, offset, array : [?D] ?eltType) {
-    assert(D.rank == offset.size);
-    var c_offset : [0 .. D.rank - 1] uint(64) = noinit;
-    for i in c_offset.domain { c_offset[i] = offset[i]:uint; }
-    var c_shape : [0 .. D.rank - 1] uint(64) = noinit;
-    for i in c_shape.domain { c_shape[i] = array.dim(i).size:uint; }
-
-    if (eltType == real(64)) {
-      ls_hs_hdf5_write_chunk_f64(filename.c_str(), dataset.c_str(),
-        D.rank:c_uint, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(array));
-    }
-    else {
-      assert(false);
     }
   }
 
@@ -287,6 +203,7 @@ module Merge {
       writeHDF5Chunk(filename, dataset, (0:uint, offsets[k]), combinedLocalVectors);
     }
   }
+  */
 
   proc merge_test()
   {
