@@ -1,7 +1,10 @@
+.RULES:
 .POSIX:
 
-CFLAGS = -I/home/tom/src/lattice-symmetries-haskell/cbits `pkg-config --cflags lattice_symmetries`
-LDFLAGS = -L/home/tom/src/lattice-symmetries-haskell/build -llattice_symmetries_haskell `pkg-config --libs lattice_symmetries`
+OPTIMIZATION ?= --debug
+CFLAGS = -Ithird_party/include $(OPTIMIZATION)
+HDF5_LIBS ?= `pkg-config --libs hdf5` -lhdf5_hl
+LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries $(HDF5_LIBS) -lutil -lgomp -lpthread
 
 all: basis
 
@@ -18,20 +21,52 @@ all: basis
 # basis: lib/libbasis.a
 # lib/libbasis.a: basis.chpl states.chpl
 # 	chpl $(CFLAGS) --library --static --library-makefile -o basis $^ $(LDFLAGS) 
+DATA_FILES = data/heisenberg_chain_10.h5 \
+	     data/heisenberg_kagome_12.h5 \
+	     data/heisenberg_kagome_16.h5 \
+	     data/heisenberg_square_4x4.h5
+
+.PHONY: check_io
+check_io: test_basis_construction test_vector_loading $(DATA_FILES)
+	for numLocales in 4 3 2 1; do \
+	  for yamlPath in \
+	    "heisenberg_chain_10.yaml" \
+	    "heisenberg_kagome_12.yaml" \
+	    "heisenberg_kagome_16.yaml" \
+	    "heisenberg_square_4x4.yaml"; do \
+	    ./test_vector_loading -nl $${numLocales} \
+	      --kInputDataPath "data/$${yamlPath%.yaml}.h5" \
+	      --kOutputDataPath "output.h5"; \
+	    ./test_basis_construction -nl $${numLocales} \
+	      --kInputBasisPath "data/$${yamlPath}" \
+	      --kInputDataPath "data/$${yamlPath%.yaml}.h5" \
+	      --kOutputDataPath "output.h5"; \
+	  done; \
+	done
 
 test_basis_construction: test_basis_construction.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl
-	# CHPL_TARGET_CPU=native chpl $(CFLAGS) --fast --vectorize -o $@ $^ $(LDFLAGS) 
 	CHPL_TARGET_CPU=native chpl \
-		-Ithird_party/include \
-		--debug -o $@ $^ \
+		$(CFLAGS) \
+		-o $@ $^ \
 		--main-module $@ \
-		-Lthird_party/lib \
-		-llattice_symmetries_haskell \
-		-llattice_symmetries \
-		`pkg-config --libs hdf5` -lhdf5_hl \
-		-lutil \
-		-lgomp \
-		-lpthread
+		$(LDFLAGS)
+
+test_vector_loading: test_vector_loading.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl
+	CHPL_TARGET_CPU=native chpl \
+		$(CFLAGS) \
+		-o $@ $^ \
+		--main-module $@ \
+		$(LDFLAGS)
+
+data/%.h5: data/%.yaml data/SpinED
+	cd data && \
+	OMP_NUM_THREADS=`nproc` ./SpinED $(<F)
+
+data/SpinED:
+	mkdir -p data && cd data && \
+	curl -LJO https://github.com/twesterhout/spin-ed/releases/download/manual/SpinED-4c3305a && \
+	mv SpinED-4c3305a SpinED && \
+	chmod +x SpinED
 
 basis: basis.chpl states.chpl merge.chpl
 	# CHPL_TARGET_CPU=native chpl $(CFLAGS) --fast --vectorize -o $@ $^ $(LDFLAGS) 

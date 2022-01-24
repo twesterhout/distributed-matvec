@@ -13,6 +13,7 @@ extern proc ls_get_hamming_weight(basis: c_ptr(ls_spin_basis)): c_int;
 extern proc ls_get_spin_inversion(basis: c_ptr(ls_spin_basis)): c_int;
 extern proc ls_is_representative(basis: c_ptr(ls_spin_basis), count: uint(64),
                                  bits: c_ptr(uint(64)), is_repr: c_ptr(uint(8)));
+extern proc ls_operator_max_buffer_size(op : c_ptr(ls_operator)): uint(64);
 // extern proc ls_convert_to_flat_spin_basis(ptr: c_ptr(c_ptr(ls_flat_spin_basis)),
 //                                           basis: c_ptr(ls_spin_basis)): ls_error_code;
 // extern proc ls_destroy_flat_spin_basis(ptr: c_ptr(ls_flat_spin_basis));
@@ -40,7 +41,7 @@ extern proc ls_hs_basis_and_hamiltonian_from_yaml(path: c_string,
     basis: c_ptr(ls_hs_spin_basis_v1), hamiltonian: c_ptr(ls_hs_operator_v1));
 extern proc ls_hs_destroy_spin_basis(basis: c_ptr(ls_hs_spin_basis_v1));
 extern proc ls_hs_destroy_operator(basis: c_ptr(ls_hs_operator_v1));
-extern proc ls_hs_operator_apply(basis : c_ptr(ls_hs_operator_v1),
+extern proc ls_hs_operator_apply(op : c_ptr(ls_hs_operator_v1),
     count : uint(64), spins : c_ptr(uint(64)), offsets : c_ptr(uint(64)),
     out_spins : c_ptr(uint(64)), out_coeffs : c_ptr(complex(128))) : c_int;
 extern proc ls_hs_hdf5_get_dataset_rank(path: c_string, dataset: c_string):c_uint;
@@ -84,9 +85,12 @@ proc deinitRuntime() {
  * :rtype: [] int
  */
 proc datasetShape(filename : string, dataset : string) {
-  const rank = ls_hs_hdf5_get_dataset_rank(filename.c_str(), dataset.c_str()):int;
+  assert(filename.locale == here && dataset.locale == here);
+  const rank = ls_hs_hdf5_get_dataset_rank(
+      filename.localize().c_str(), dataset.localize().c_str()):int;
   var c_shape : [0 .. rank - 1] uint(64);
-  ls_hs_hdf5_get_dataset_shape(filename.c_str(), dataset.c_str(), c_ptrTo(c_shape));
+  ls_hs_hdf5_get_dataset_shape(filename.localize().c_str(), dataset.localize().c_str(),
+      c_ptrTo(c_shape));
   return [i in c_shape.domain] c_shape[i]:int; 
 }
 
@@ -107,6 +111,7 @@ proc _makeDomain(shape : 2 * int) : domain(2) {
  * :rtype: [] eltType
  */
 proc readHDF5Chunk(filename : string, dataset : string, type eltType, offset, shape) {
+  assert(filename.locale == here && dataset.locale == here);
   const dom = _makeDomain(shape);
   var array : [dom] eltType;
   readHDF5Chunk(filename, dataset, offset, array);
@@ -126,11 +131,11 @@ proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltT
     c_shape[i] = array.dim(i).size:uint;
   }
   if (eltType == uint(64)) {
-    ls_hs_hdf5_read_chunk_u64(filename.c_str(), dataset.c_str(),
+    ls_hs_hdf5_read_chunk_u64(filename.localize().c_str(), dataset.c_str(),
       rank:c_uint, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(array));
   }
   else if (eltType == real(64)) {
-    ls_hs_hdf5_read_chunk_f64(filename.c_str(), dataset.c_str(),
+    ls_hs_hdf5_read_chunk_f64(filename.localize().c_str(), dataset.c_str(),
       rank:c_uint, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(array));
   }
   else {
@@ -143,14 +148,15 @@ proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltT
  *
  */
 proc createHDF5Dataset(filename : string, dataset : string, type eltType, shape) {
+  assert(filename.locale == here && dataset.locale == here);
   var c_shape : [0 .. shape.size - 1] uint(64) = noinit;
   for i in 0 .. shape.size - 1 { c_shape[i] = shape[i]:uint; }
   if (eltType == uint(64)) {
-    ls_hs_hdf5_create_dataset_u64(filename.c_str(), dataset.c_str(),
+    ls_hs_hdf5_create_dataset_u64(filename.localize().c_str(), dataset.localize().c_str(),
       c_shape.size:c_uint, c_ptrTo(c_shape));
   }
   else if (eltType == real(64)) {
-    ls_hs_hdf5_create_dataset_f64(filename.c_str(), dataset.c_str(),
+    ls_hs_hdf5_create_dataset_f64(filename.localize().c_str(), dataset.localize().c_str(),
       c_shape.size:c_uint, c_ptrTo(c_shape));
   }
   else {
@@ -168,10 +174,10 @@ proc writeHDF5Chunk(filename : string, dataset : string, offset, array : [?D] ?e
   for i in c_shape.domain { c_shape[i] = array.dim(i).size:uint; }
 
   if (eltType == uint(64)) {
-    ls_hs_hdf5_write_chunk_u64(filename.c_str(), dataset.c_str(),
+    ls_hs_hdf5_write_chunk_u64(filename.localize().c_str(), dataset.localize().c_str(),
       D.rank:c_uint, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(array));
   } else if (eltType == real(64)) {
-    ls_hs_hdf5_write_chunk_f64(filename.c_str(), dataset.c_str(),
+    ls_hs_hdf5_write_chunk_f64(filename.localize().c_str(), dataset.localize().c_str(),
       D.rank:c_uint, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(array));
   }
   else {

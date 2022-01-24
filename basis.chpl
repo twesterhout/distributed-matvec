@@ -56,29 +56,6 @@ class DistributedBasis {
   }
 }
 
-class DistributedOperator {
-  var _localOperators : [OnePerLocale] ls_hs_operator_v1;
-
-  proc init(path: string) {
-    this._localOperators = [loc in Locales] new ls_hs_operator_v1(nil, nil);
-    complete();
-
-    coforall loc in Locales do on loc {
-      const localPath = path;
-      var dummyBasis = new ls_hs_spin_basis_v1(nil, nil);
-      ls_hs_basis_and_hamiltonian_from_yaml(
-        localPath.c_str(), c_ptrTo(dummyBasis), c_ptrTo(this._localOperators[loc.id]));
-      ls_hs_destroy_spin_basis(c_ptrTo(dummyBasis));
-    }
-  }
-
-  proc deinit() {
-    coforall loc in Locales do on loc {
-      ls_hs_destroy_operator(c_ptrTo(this._localOperators[loc.id]));
-    }
-  }
-}
-
 class BasisStates {
   var size : int;
   var representatives : [OnePerLocale] [0 ..# size] uint(64);
@@ -136,6 +113,7 @@ proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltT
 }
 */
 
+/*
 config const loadArrayChunkSize : int = 10 * 1024 * 1024 / numLocales;
 
 proc _histogramFromChunk(const ref array : [] uint(64), ref timer : Timer) {
@@ -180,10 +158,12 @@ proc calculateNumberStatesPerLocale(filename : string, dataset : string) {
   writeln("[Chapel] calculateNumberStatesPerLocale took ", _totalTimer.elapsed());
   return histogram;
 }
+*/
 
 // MemoryInitialization; moveInitialize
 // std::vector x{{1, 2, 3}};
 
+/*
 proc splitIntoChunks(lower : int, upper : int, chunkSize : int) {
   assert(upper >= lower);
   assert(chunkSize >= 1);
@@ -446,7 +426,7 @@ proc loadStates(filename : string, basisDataset : string,
   writeln("[Chapel] loadArray spent ", _copyTimer.elapsed(), " copying to other locales");
   return globalBuffer;
 }
-
+*/
 
 proc makeStates(basis: DistributedBasis) {
   // startVdebug("makeStates");
