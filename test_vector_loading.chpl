@@ -1,4 +1,5 @@
 use basis;
+use Distribute;
 use MatVec.IO;
 use wrapper only initRuntime, deinitRuntime;
 use Spawn;
@@ -10,13 +11,14 @@ config const kDebugLatticeSymmetries = false;
 proc main() {
   initRuntime(kDebugLatticeSymmetries);
 
-  const countPerLocale =
-    calculateNumberStatesPerLocale(kInputDataPath, "/basis/representatives");
-  var states = loadRepresentatives(kInputDataPath, "/basis/representatives", countPerLocale);
-  var vectors = loadVectors(kInputDataPath,
-      "/basis/representatives", "/hamiltonian/eigenvectors", real(64), countPerLocale);
-  mergeAndWriteVectors(states, vectors, countPerLocale, kOutputDataPath, "/y");
+  const blockDistRepresentatives = loadStates(kInputDataPath, "/basis/representatives");
+  const blockDistVectors = loadVectors(kInputDataPath, "/hamiltonian/eigenvectors", real(64));
+  const mask = distributionMask(blockDistRepresentatives);
 
+  var states = distributeStates(blockDistRepresentatives, mask);
+  var vectors = distributeVectors(blockDistVectors, mask);
+
+  mergeAndWriteVectors(states.representatives, vectors, states.counts, kOutputDataPath, "/y");
   var h5diff = spawn(
     ["h5diff", kOutputDataPath, kInputDataPath, "/y", "/hamiltonian/eigenvectors"]);
   h5diff.wait();

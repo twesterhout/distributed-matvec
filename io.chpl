@@ -4,11 +4,13 @@ module MatVec {
     use basis only OnePerLocale;
     use Search;
     use Time;
+    use BlockDist;
+    use Merge;
 
-    config const kMergeChunkSizeScale : real = 1.0 / 5.0;
-    config const kLoadChunkSize : int = 10 * 1024 / numLocales;
+    config const kMergeChunkSize : int = 5;
+    // config const kLoadChunkSize : int = 10 * 1024 / numLocales;
 
-
+    /*
     module MergeAndWrite {
       import MatVec.IO.kMergeChunkSizeScale;
       use List;
@@ -30,6 +32,72 @@ module MatVec {
         }
         return edges;
       }
+
+      private globalChunkBounds(lower : eltType, upper : eltType,
+                                chunkSize : int, const ref array : [] ?eltType) {
+        assert(lower <= upper);
+        assert(chunkSize >= 1);
+        var bounds : list(eltType);
+        bounds.append(lower);
+        var offset = chunkSize;
+        while (offset < array.size) {
+          bounds.append(array[offset]);
+          offset += chunkSize;
+        }
+        return bounds;
+      }
+      private iter localChunks(param tag: iterKind,
+                               const ref states : BasisStates, chunkSize : int)
+          where tag == iterKind.standalone {
+        assert(chunkSize >= 1);
+        const D = states.representatives.domain;
+        const ref representatives = states.representatives;
+        const ref counts = states.counts;
+        const lower = min reduce [i in D1] representatives[i][0];
+        const upper = max reduce [i in D1] representatives[i][counts[i] - 1];
+        const bounds = globalChunkBounds(lower, upper, chunkSize,
+                                         representatives[0][0 ..# counts[0]]);
+
+        var offsets : [0 ..# counts.size, 0 ..# bounds.size] int;
+        forall i in counts.domain {
+          offsets[i, 0] = 0;
+          offsets[i, bounds.size - 1] = counts[i];
+          for j in 1 .. bounds.size - 2 {
+            const (_found, location) = binarySearch(
+              representatives[i][0 ..# counts[i]], bounds[j]);
+            offsets[i, j] = location;
+          }
+        }
+
+        forall j in 0 ..# bounds.size - 1 {
+          const chunk : [0 ..# counts.size] (int, int) =
+            [i in offsets.dim(0)] (offsets[i, j], offsets[i, j + 1]);
+          yield chunk;
+        }
+      }
+
+      private proc chunkToIndices(const ref states, const ref counts) {
+        const totalCount = + reduce counts;
+        var indices : [0 ..# totalCount] (int, int) = kmergeIndices(states, counts);
+        return indices;
+      }
+      private iter mergeIndicesChunks(param tag: iterKind,
+                                      const ref states : BasisStates, chunkSize : int)
+          where tag == iterKind.standalone {
+
+          forall offsets in localChunks(states, chunkSize) {
+            const localCounts = [i in offsets.domain] (offsets[i][1] - offsets[i][0]);
+            const maxLocalCount = max reduce localCounts;
+            var localStates : [0 ..# localCounts.size, 0 ..# maxLocalCount] eltType;
+            for i in localStates.dim(0) {
+              localStates[i, 0 ..# localCounts[i]] =
+                states[i][offsets[i][0] .. offsets[i][1] - 1];
+            }
+            const totalLocalCount = + reduce localCounts;
+            var indices : [0 ..# totalLocalCount] (int, int) = kmergeIndices(states, counts);
+          }
+      }
+
 
       private proc computeBounds(states : [?D] ?eltType, lower : eltType,
                                  upper : eltType, chunkSize : int) where (D.rank == 1) {
@@ -165,8 +233,35 @@ module MatVec {
         }
       }
     } // module MergeAndWrite
+    */
 
-    import MatVec.IO.MergeAndWrite;
+    proc gatherImpl(param tag : int, const ref arrays, const ref indices : [?D] (int, int))
+        where tag == 1 {
+      type eltType = arrays[0].eltType;
+      var combined : [0 ..# indices.size] eltType;
+      forall ((arrayIndex, indexInArray), offset) in zip(indices, 0..) {
+        combined[offset] = arrays[arrayIndex][indexInArray];
+      }
+      return combined;
+    }
+    proc gatherImpl(param tag : int, const ref arrays, const ref indices : [?D] (int, int))
+        where tag == 2 {
+      type eltType = arrays[0].eltType;
+      const numberVectors = arrays[0].dim(0).size;
+      var combined : [0 ..# numberVectors, 0 ..# indices.size] eltType;
+      forall ((arrayIndex, indexInArray), offset) in zip(indices, 0..) {
+        forall k in 0 ..# numberVectors {
+          combined[k, offset] = arrays[arrayIndex][k, indexInArray];
+        }
+      }
+      return combined;
+    }
+
+    inline proc gather(const ref arrays, const ref indices : [?D] (int, int))
+        where D.rank == 1 {
+      return gatherImpl(arrays[0].domain.rank, arrays, indices);
+    }
+
     /* Merge states and write them to HDF5 file.
      *
      * :arg states: distributed array of sorted arrays
@@ -179,14 +274,63 @@ module MatVec {
      * :arg dataset:  path to dataset within HDF5 file.
      */
     proc mergeAndWriteStates(const ref states, const ref counts : [] int,
-                             filename: string, dataset: string) {
-      MergeAndWrite.mainLoop(counts, filename, (dataset, none), states);
+                             filename: string, dataset: string,
+                             chunkSize : int = 5) {
+      const totalCount = (+ reduce counts);
+      createHDF5Dataset(filename, dataset, states[0].eltType, (totalCount,));
+      forall (offset, indices) in kMergeIndicesChunked(states, counts, chunkSize) {
+        var localStates = gather(states, indices);
+        // writeln("[Chapel] writing ", localStates);
+        writeHDF5Chunk(filename, dataset, (offset,), localStates);
+      }
     }
 
     proc mergeAndWriteVectors(const ref states, const ref vectors, const ref counts : [] int,
-                              filename: string, dataset: string) {
-      MergeAndWrite.mainLoop(counts, filename, (none, dataset), states, vectors);
+                              filename: string, dataset: string,
+                              chunkSize : int = 5) {
+      const totalCount = (+ reduce counts);
+      const numberVectors = vectors[0].dim(0).size;
+      createHDF5Dataset(filename, dataset, vectors[0].eltType, (numberVectors, totalCount));
+      forall (offset, indices) in kMergeIndicesChunked(states, counts, chunkSize) {
+        var localVectors = gather(vectors, indices);
+        // writeln("[Chapel] writing ", localStates);
+        writeHDF5Chunk(filename, dataset, (0, offset), localVectors);
+      }
     }
+
+    proc loadStates(filename : string, dataset : string) {
+      const _shape = datasetShape(filename, dataset);
+      assert(_shape.size == 1);
+      const totalNumberStates = _shape[0];
+     
+      const D : domain(1) dmapped Block(LocaleSpace) = {0 ..# totalNumberStates};
+      var states : [D] uint(64);
+      coforall loc in Locales do on loc {
+        const indices = states.localSubdomain();
+        readHDF5Chunk(filename, dataset, (indices.low,), states[indices]);
+      }
+      return states;
+    }
+    proc loadVectors(filename : string, dataset : string, type eltType = real(64)) {
+      const _shape = datasetShape(filename, dataset);
+      assert(_shape.size == 2);
+      const numberVectors = _shape[0];
+      const totalNumberStates = _shape[1];
+     
+      const D : domain(2) dmapped Block({0 ..# 1, 0 ..# numLocales}) =
+        {0 ..# numberVectors, 0 ..# totalNumberStates};
+      var vectors : [D] eltType;
+      coforall loc in Locales do on loc {
+        const indices = vectors.localSubdomain();
+        readHDF5Chunk(filename, dataset, indices.low, vectors[indices]);
+      }
+      return vectors;
+    }
+
+    // proc mergeAndWriteVectors(const ref states, const ref vectors, const ref counts : [] int,
+    //                           filename: string, dataset: string) {
+    //   MergeAndWrite.mainLoop(counts, filename, (none, dataset), states, vectors);
+    // }
 
     /*
     proc mergeAndWriteStates(const ref states, const ref counts : [] int,
@@ -283,6 +427,7 @@ module MatVec {
     }
     */
 
+    /*
     module LoadAndDistribute {
       use Time;
       use basis only OnePerLocale;
@@ -496,5 +641,6 @@ module MatVec {
       return loadVectors(filename, basisDataset, arrayDataset, eltType,
           calculateNumberStatesPerLocale(filename, basisDataset));
     }
+    */
   } // module IO
 } // module MatVec

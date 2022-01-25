@@ -111,7 +111,6 @@ proc _makeDomain(shape : 2 * int) : domain(2) {
  * :rtype: [] eltType
  */
 proc readHDF5Chunk(filename : string, dataset : string, type eltType, offset, shape) {
-  assert(filename.locale == here && dataset.locale == here);
   const dom = _makeDomain(shape);
   var array : [dom] eltType;
   readHDF5Chunk(filename, dataset, offset, array);
@@ -121,8 +120,8 @@ proc readHDF5Chunk(filename : string, dataset : string, type eltType, offset, sh
 /* Read part of a dataset from a HDF5 file. This function modifies `array` inplace.
  * 
  */
-proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltType) {
-  assert(offset.size == array.rank);
+proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltType)
+    where isTuple(offset) && offset.size == array.rank {
   const rank = offset.size;
   var c_offset : [0 .. rank - 1] uint(64) = noinit;
   var c_shape : [0 .. rank - 1] uint(64) = noinit;
@@ -166,7 +165,8 @@ proc createHDF5Dataset(filename : string, dataset : string, type eltType, shape)
 
 /* Write array to a HDF5 dataset.
  */
-proc writeHDF5Chunk(filename : string, dataset : string, offset, array : [?D] ?eltType) {
+proc writeHDF5Chunk(filename : string, dataset : string, offset, array : [?D] ?eltType)
+    where isTuple(offset) && offset.size == D.rank {
   assert(D.rank == offset.size);
   var c_offset : [0 .. D.rank - 1] uint(64) = noinit;
   var c_shape  : [0 .. D.rank - 1] uint(64) = noinit;

@@ -28,10 +28,10 @@ module Merge {
     }
   }
 
-  private inline proc indexAccess(const ref chunks, i : int, j : int) {
+  private inline proc indexAccess(const ref chunks, i : int, j) {
     return chunks[i][j];
   }
-  private inline proc indexAccess(const ref chunks : [?D] ?eltType, i : int, j : int)
+  private inline proc indexAccess(const ref chunks : [?D] ?eltType, i : int, j)
       where (D.rank == 2) {
     return chunks[i, j];
   }
@@ -101,7 +101,7 @@ module Merge {
     return result;
   }
 
-  iter kmergeIndices(const ref chunks, const ref counts) {
+  iter kMergeIndices(const ref chunks, const ref counts) {
     var tree = _buildTree(chunks, counts);
     var root = _processOne(tree, chunks, counts);
     while (!root.isInfinity()) {
@@ -110,9 +110,100 @@ module Merge {
     }
   }
 
-  iter kmerge(const ref chunks, const ref counts) {
-    for (chunkIndex, indexInChunk) in kmergeIndices(chunks, counts) {
+  iter kMerge(const ref chunks, const ref counts) {
+    for (chunkIndex, indexInChunk) in kMergeIndices(chunks, counts) {
       yield indexAccess(chunks, chunkIndex, indexInChunk);
+    }
+  }
+
+  private proc chunkBounds(const ref arrays, const ref counts, chunkSize : int) {
+    assert(chunkSize >= 1);
+    assert(&& reduce [i in counts.domain] counts[i] > 0);
+    type eltType = indexAccess(arrays, 0, 0).type;
+    const lower = indexAccess(arrays, 0, 0);
+    const upper = indexAccess(arrays, 0, counts[0] - 1);
+    // const lower = min reduce [i in counts.domain] indexAccess(arrays, i, 0);
+    // const upper = max reduce [i in counts.domain] indexAccess(arrays, i, counts[i] - 1);
+
+    var bounds : list(eltType);
+    bounds.append(lower);
+    var offset = chunkSize;
+    while (offset < counts[0]) {
+      bounds.append(indexAccess(arrays, 0, offset));
+      offset += chunkSize;
+    }
+    if (bounds.last() != upper || bounds.size < 2) { bounds.append(upper); }
+    writeln("chunkBounds: ", bounds);
+    return bounds;
+  }
+  private proc chunkOffsets(const ref arrays, const ref counts, chunkSize : int) {
+    const bounds = chunkBounds(arrays, counts, chunkSize);
+
+    var offsets : [0 ..# counts.size, 0 ..# bounds.size] int;
+    forall i in counts.domain {
+      offsets[i, 0] = 0;
+      offsets[i, bounds.size - 1] = counts[i];
+      for j in 1 .. bounds.size - 2 {
+        const (_found, location) = binarySearch(
+          indexAccess(arrays, i, 0 ..# counts[i]), bounds[j]);
+        offsets[i, j] = location;
+      }
+    }
+    writeln("chunkOffsets:");
+    writeln(offsets);
+    return offsets;
+
+    // forall j in 0 ..# bounds.size - 1 {
+    //   const chunk : [0 ..# counts.size] (int, int) =
+    //     [i in offsets.dim(0)] (offsets[i, j], offsets[i, j + 1]);
+    //   yield chunk;
+    // }
+  }
+  private inline proc linearizeOffsets(const ref offsets) {
+    return [j in offsets.dim(1)] (+ reduce offsets[.., j]);
+  }
+  private proc chunkedIterBody(chunkId : int, const ref arrays, const ref counts,
+                               const ref offsets, numberArrays, type eltType) {
+    // Gather chunk
+    const localCounts = [i in 0 ..# numberArrays] offsets[i, chunkId + 1] - offsets[i, chunkId];
+    const totalLocalCount = + reduce localCounts;
+    const maxLocalCount = max reduce localCounts;
+    var localArrays : [0 ..# numberArrays, 0 ..# maxLocalCount] eltType;
+    for i in 0 ..# numberArrays {
+      localArrays[i, 0 ..# localCounts[i]] =
+        indexAccess(arrays, i, offsets[i, chunkId] .. offsets[i, chunkId + 1] - 1);
+    }
+    writeln("chunkId=", chunkId, " localArrays:");
+    writeln(localArrays);
+    var localMergeIndices : [0 ..# totalLocalCount] (int, int);
+    for ((arrayIndex, indexInArray), j) in zip(kMergeIndices(localArrays, localCounts),
+                                               localMergeIndices) {
+      j = (arrayIndex, offsets[arrayIndex, chunkId] + indexInArray);
+    }
+    return localMergeIndices;
+  }
+  iter kMergeIndicesChunked(const ref arrays, const ref counts, chunkSize : int) {
+    const offsets = chunkOffsets(arrays, counts, chunkSize);
+    const linear = linearizeOffsets(offsets);
+    const numberArrays = counts.size;
+    const numberChunks = offsets.dim(1).size - 1;
+    type eltType = indexAccess(arrays, 0, 0).type;
+    for chunkId in 0 ..# numberChunks {
+      const indices = chunkedIterBody(chunkId, arrays, counts, offsets, numberArrays, eltType);
+      yield (linear[chunkId], indices);
+    }
+  }
+  iter kMergeIndicesChunked(param tag : iterKind,
+                            const ref arrays, const ref counts, chunkSize : int)
+      where tag == iterKind.standalone {
+    const offsets = chunkOffsets(arrays, counts, chunkSize);
+    const linear = linearizeOffsets(offsets);
+    const numberArrays = counts.size;
+    const numberChunks = offsets.dim(1).size - 1;
+    type eltType = indexAccess(arrays, 0, 0).type;
+    forall chunkId in 0 ..# numberChunks {
+      const indices = chunkedIterBody(chunkId, arrays, counts, offsets, numberArrays, eltType);
+      yield (linear[chunkId], indices);
     }
   }
 
