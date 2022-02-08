@@ -45,7 +45,7 @@ check_io: test_basis_construction test_vector_loading $(DATA_FILES)
 	done
 
 test_matvec: test_matvec.chpl matvec.chpl Distribute.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl
-	CHPL_TARGET_CPU=native chpl \
+	chpl \
 		$(CFLAGS) \
 		-o $@ $^ \
 		--main-module $@ \

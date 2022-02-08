@@ -14,6 +14,7 @@ extern proc ls_get_spin_inversion(basis: c_ptr(ls_spin_basis)): c_int;
 extern proc ls_is_representative(basis: c_ptr(ls_spin_basis), count: uint(64),
                                  bits: c_ptr(uint(64)), is_repr: c_ptr(uint(8)));
 extern proc ls_operator_max_buffer_size(op : c_ptr(ls_operator)): uint(64);
+extern proc ls_binary_search(data : c_ptr(uint(64)), size : uint(64), key : uint(64)): uint(64);
 // extern proc ls_convert_to_flat_spin_basis(ptr: c_ptr(c_ptr(ls_flat_spin_basis)),
 //                                           basis: c_ptr(ls_spin_basis)): ls_error_code;
 // extern proc ls_destroy_flat_spin_basis(ptr: c_ptr(ls_flat_spin_basis));

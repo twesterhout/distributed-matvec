@@ -6,6 +6,7 @@ use CyclicDist;
 use Time;
 use VisualDebug;
 use RangeChunk;
+use Search;
 
 use wrapper;
 use states;
@@ -61,10 +62,84 @@ class DistributedBasis {
   }
 }
 
+
+inline proc makeShift(numberSpins : int, numberBits : int) : int {
+  assert(0 < numberBits && numberBits < 64);
+  return if numberBits >= numberSpins then 0 else (numberSpins - numberBits);
+}
+
 class BasisStates {
-  var size : int;
-  var representatives : [OnePerLocale] [0 ..# size] uint(64);
-  var counts : [OnePerLocale] int;
+  var _size : int;
+  var _representatives : [OnePerLocale] [0 ..# _size] uint(64);
+  var _counts : [OnePerLocale] int;
+  var _numberSpins : int;
+  var _numberBits : int = 16;
+  var _shift : int;
+  var _ranges : [OnePerLocale] [0 ..# 1 + (1 << _numberBits)] int;
+
+  proc _generateBucketRanges() {
+    coforall loc in Locales do on loc {
+      ref localRanges = _ranges[loc.id];
+      ref localStates = _representatives[loc.id][0 ..# _counts[loc.id]];
+      const numberBuckets = 1 << _numberBits;
+      var offset = 0;
+      for i in 0 ..# numberBuckets {
+        localRanges[i] = offset;
+        while offset != localStates.size && bucketIndex(localStates[offset]) == i {
+          offset += 1;
+        }
+      }
+      localRanges[numberBuckets] = offset;
+      assert(offset == localStates.size);
+    }
+  }
+
+  proc init(numberSpins : int, representatives, counts, numberBits : int = 16) {
+    this._size = representatives[0].size;
+    this._representatives = representatives;
+    this._counts = counts;
+    this._numberSpins = numberSpins;
+    this._numberBits = numberBits;
+    this._shift = makeShift(numberSpins, numberBits);
+    this.complete();
+    _generateBucketRanges();
+  }
+
+  inline proc totalNumberStates() : int {
+    return + reduce _counts;
+  }
+
+  inline proc bucketIndex(x : uint(64)) : int {
+    return (x >> _shift):int;
+  }
+
+  inline proc getCounts(loc : locale = here) : int {
+    return _counts[loc.id];
+    // ref r = _representatives[loc.id];
+    // return r[0 ..# _counts[loc.id]];
+  }
+
+  inline proc getRepresentatives(loc : locale = here) ref {
+    return _representatives[loc.id];
+    // ref r = _representatives[loc.id][0 ..# _counts[loc.id]];
+    // return r;
+  }
+
+  proc getIndex(x : uint(64), loc : locale = here) : int {
+    const i = bucketIndex(x);
+    const b = _ranges[loc.id][i];
+    const e = _ranges[loc.id][i + 1];
+    // The following causes a memory allocation... :(
+    // ref r = getRepresentatives(loc)[_ranges[loc.id][i] .. _ranges[loc.id][i + 1] - 1];
+    const dataPtr = c_ptrTo(_representatives[loc.id][b]);
+    const size = (e - b):uint(64);
+    const j = ls_binary_search(dataPtr, size, x);
+    assert(j < size);
+    // const (found, j) = binarySearch(r, x);
+    // writeln("found=", found, ", sj=", sj, ", representatives=", representatives);
+    // assert(found);
+    return b + j:int;
+  }
 }
 
 // proc numlocs() param where (CHPL_COMM==none) {
@@ -491,7 +566,7 @@ proc makeStates(basis: DistributedBasis) {
   // stopVdebug();
 
   // NOTE: this creates a copy of states, right? :(
-  return new BasisStates(maxCount, states, counts);
+  return new BasisStates(basis.numberSpins(), states, counts);
 }
 
 config const yamlPath = "/home/tom/src/spin-ed/example/heisenberg_pyrochlore_32.yaml";

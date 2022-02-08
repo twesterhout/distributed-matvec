@@ -5,6 +5,7 @@ use Search;
 use CPtr;
 use Time;
 use states only hash64_01;
+use Memory.Diagnostics;
 
 config const kBatchSize = 1;
 
@@ -89,15 +90,15 @@ record TaskState {
   var offsetsBatch : [0 ..# batchSize + 1] uint(64);
   var spinsBatch : [0 ..# bufferSize] uint(64);
   var coeffsBatch : [0 ..# bufferSize] complex(128);
+  var ysBatch : [0 ..# batchSize] complex(128);
 }
 
 proc processBatch(count : int,
                   ref info : TaskState,
                   const ref basisStates : BasisStates,
-                  const ref X,
-                  ref _timer : Timer) {
+                  const ref X) {
+  var timer = new Timer();
   type eltType = X[0].eltType;
-  var Y : [0 ..# count] complex(128);
 
   for k in 0 ..# count {
     var yk : complex(128) = 0;
@@ -110,10 +111,13 @@ proc processBatch(count : int,
       // on Locales[localeId] {
         // const ref representatives =
         //   basisStates.representatives[localeId][0 ..# basisStates.counts[localeId]];
-        const (found, j) = binarySearch(
-          basisStates.representatives[localeId][0 ..# basisStates.counts[localeId]], sj);
+        // ref r = basisStates.getRepresentatives(Locales[localeId])[0 ..# basisStates.getCounts(Locales[localeId])];
+        // const (found, j) = binarySearch(r, sj);
         // writeln("found=", found, ", sj=", sj, ", representatives=", representatives);
-        assert(found);
+        // assert(found);
+        timer.start();
+        const j = basisStates.getIndex(sj, Locales[localeId]);
+        timer.stop();
         xj = X[localeId][0, j];
       // }
       // _timer.stop();
@@ -121,63 +125,17 @@ proc processBatch(count : int,
       yk += info.coeffsBatch[_j:int] * xj;
     }
 
-    Y[k] = yk;
+    info.ysBatch[k] = yk;
   }
-  return Y;
+  return timer.elapsed();
 }
 
-proc batchedApply(matrix : DistributedOperator, ref spins, ref s : TaskState) {
+inline proc batchedApply(matrix : DistributedOperator, ref spins, ref s : TaskState) {
   matrix.batchedApply(
     spins,
     s.offsetsBatch,
     s.spinsBatch,
     s.coeffsBatch);
-  // writeln("batchedApply(", spins, "):");
-  // writeln("  ", s.offsetsBatch);
-  // writeln("  ", s.spinsBatch);
-  // writeln("  ", s.coeffsBatch);
-}
-proc batchedApply(matrix : DistributedOperator, ref spins, ref s : TaskState,
-                  ref timer : Timer) {
-  timer.start();
-  batchedApply(matrix, spins, s);
-  timer.stop();
-}
-
-proc matvecMinimal(matrix : DistributedOperator, 
-                   const ref basisStates : BasisStates)
-                  // const ref X, // [OnePerLocale] [?D] ?eltType
-                  // ref Y) // [OnePerLocale] [?D] ?eltType
-{
-  // const batchSize = 1; // max(1, basisStates.size / (10 * loc.maxTaskPar));
-  // const bufferSize = 13; // matrix.requiredBufferSize(batchSize);
-  // type eltType = X[0].eltType;
-  coforall loc in Locales do on loc {
-    // ref representatives =
-    //   basisStates.representatives[loc.id][0 ..# basisStates.counts[loc.id]];
-    // const numberChunks = 1; // (representatives.size + batchSize - 1) / batchSize;
-    // var offsetsBatch : [0 .. batchSize] uint(64);
-    // var spinsBatch : [0 .. bufferSize - 1] uint(64);
-    // var coeffsBatch : [0 .. bufferSize - 1] complex(128);
-    // for chunkId in 0 ..# numberChunks {
-       //  with (in offsetsBatch, in spinsBatch, in coeffsBatch) {
-      // const i = chunkId * batchSize;
-      // const n = min(batchSize, basisStates.counts[loc.id] - i);
-      // assert(n > 0);
-      // assert(n == 1);
-      // _batchedApplyTimers[loc.id].start();
-      // var offsetsBatch : [0 ..# batchSize + 1] uint(64);
-      // var spinsBatch : [0 ..# bufferSize] uint(64);
-      // var coeffsBatch : [0 ..# bufferSize] complex(128);
-      writeln(basisStates.representatives[loc.id][0 ..# 1]);
-      writeln(c_ptrTo(basisStates.representatives[loc.id][0 ..# 1]));
-      // matrix.batchedApply(
-      //   basisStates.representatives[loc.id][0 ..# 1],
-      //   offsetsBatch,
-      //   spinsBatch,
-      //   coeffsBatch);
-    // }
-  }
 }
 
 proc matvecSerial(matrix : DistributedOperator, 
@@ -186,75 +144,72 @@ proc matvecSerial(matrix : DistributedOperator,
                   ref Y) // [OnePerLocale] [?D] ?eltType
 {
   var _totalTimer : Timer = new Timer();
-  var _batchedApplyTimers : [OnePerLocale] Timer = new Timer();
-  var _searchTimers : [OnePerLocale] Timer = new Timer();
+  var _applyTime : [OnePerLocale] real;
+  var _searchTime : [OnePerLocale] real;
+  var _processTime : [OnePerLocale] real;
   _totalTimer.start();
-  assert(basisStates.representatives.size == numLocales);
-  assert(basisStates.counts.size == numLocales);
-  assert(X.size == numLocales);
-  assert(Y.size == numLocales);
+  // assert(basisStates.representatives.size == numLocales);
+  // assert(basisStates.counts.size == numLocales);
+  // assert(X.size == numLocales);
+  // assert(Y.size == numLocales);
 
   const batchSize = kBatchSize; // max(1, basisStates.size / (10 * loc.maxTaskPar));
   const bufferSize = matrix.requiredBufferSize(batchSize);
   type eltType = X[0].eltType;
+
+  startVerboseMem();
   coforall loc in Locales do on loc {
-    ref representatives =
-      basisStates.representatives[loc.id][0 ..# basisStates.counts[loc.id]];
+    ref representatives = basisStates.getRepresentatives()[0 ..# basisStates.getCounts()];
+    // basisStates.representatives[loc.id][0 ..# basisStates.counts[loc.id]];
     const numberChunks = (representatives.size + batchSize - 1) / batchSize;
     var info = new TaskState(batchSize, bufferSize);
-    forall chunkId in 0 ..# numberChunks
-        with (in info) {
-      const i = chunkId * batchSize;
-      const n = min(batchSize, basisStates.counts[loc.id] - i);
-      assert(n > 0);
-      assert(n == 1);
-      batchedApply(matrix, basisStates.representatives[loc.id][i ..# n], info);
 
-      const yk = processBatch(n, info, basisStates, X, _searchTimers[loc.id]);
+    var applyTime : atomic real = 0;
+    var processTime : atomic real = 0;
+    var searchTime : atomic real = 0;
+    forall chunkId in 0 ..# numberChunks with (in info) {
+      const i = chunkId * batchSize;
+      const n = min(batchSize, representatives.size - i);
+      // assert(n > 0);
+      // assert(n == 1);
+      var applyTimer = new Timer();
+      applyTimer.start();
+      batchedApply(matrix, representatives[i ..# n], info);
+      applyTimer.stop();
+      applyTime.add(applyTimer.elapsed());
+
+      var processTimer = new Timer();
+      processTimer.start();
+      const t = processBatch(n, info, basisStates, X);
+      processTimer.stop();
+      processTime.add(processTimer.elapsed());
+      searchTime.add(t);
+
       if isSubtype(Y[loc.id].eltType, complex) {
-        Y[loc.id][0, i ..# n] = yk;
+        Y[loc.id][0, i ..# n] = info.ysBatch[0 ..# n];
       }
       else {
-        assert(&& reduce (yk.im == 0));
-        Y[loc.id][0, i ..# n] = yk.re;
+        // assert(&& reduce (info.ysBatch[0 ..# n].im == 0));
+        // The following is allocating memory... :(
+        // Y[loc.id][0, i ..# n] = info.ysBatch[0 ..# n].re;
+        // Hence, we do the loop manually
+        for k in 0 ..# n {
+          assert(info.ysBatch[k].im == 0);
+          Y[loc.id][0, i + k] = info.ysBatch[k].re;
+        }
       }
-
-      // for k in 0 ..# n {
-      //   // writeln("si=", basisStates.representatives[loc.id][i + k]);
-      //   // writeln(offsetsBatch);
-      //   var yk : complex(128) = 0;
-      //   for _j in offsetsBatch[k] .. offsetsBatch[k + 1] - 1 {
-      //     const sj = spinsBatch[_j:int];
-      //     var xj : eltType;
-      //     const localeId = (hash64_01(sj) % numLocales:uint):int;
-      //     _searchTimers[loc.id].start();
-      //     on Locales[localeId] {
-      //       const ref representatives =
-      //         basisStates.representatives[localeId][0 ..# basisStates.counts[localeId]];
-      //       const (found, j) = binarySearch(representatives, sj);
-      //       // writeln("found=", found, ", sj=", sj, ", representatives=", representatives);
-      //       assert(found);
-      //       xj = X[localeId][0, j];
-      //     }
-      //     _searchTimers[loc.id].stop();
-      //     yk += coeffsBatch[_j:int] * xj;
-      //   }
-
-      //   if isSubtype(Y[loc.id].eltType, complex) {
-      //     Y[loc.id][0, i + k] = yk;
-      //   }
-      //   else {
-      //     assert(yk.im == 0);
-      //     Y[loc.id][0, i + k] = yk.re;
-      //   }
-      // }
     }
+    _applyTime[loc.id] = applyTime.read();
+    _searchTime[loc.id] = searchTime.read();
+    _processTime[loc.id] = processTime.read();
   }
+  stopVerboseMem();
 
   _totalTimer.stop();
   writeln("[Chapel] matvecSerial took ", _totalTimer.elapsed());
-  writeln("[Chapel]     ", _batchedApplyTimers.elapsed(), " spent in matrix.batchedApply");
-  writeln("[Chapel]     ", _searchTimers.elapsed(), " spent in searching for indices");
+  writeln("[Chapel]     ", _applyTime, " spent in matrix.batchedApply");
+  writeln("[Chapel]     ", _searchTime, " spent in searching for indices");
+  writeln("[Chapel]     ", _processTime, " spent in processing batches");
 }
 
 

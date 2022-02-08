@@ -5,24 +5,43 @@ use Distribute;
 use Merge;
 use MatVec.IO;
 use CPtr;
+use Time;
 
 config const kInputBasisPath = "data/heisenberg_chain_10.yaml";
 config const kInputDataPath = "data/matvec/heisenberg_chain_10.h5";
 config const kOutputDataPath = "output.h5";
 config const kDebugLatticeSymmetries = false;
+config const kDistributionChunkSize = 10000;
+config const kPrintOutput = false;
 
 proc main() {
   initRuntime(false);
-
+  var timer = new Timer();
   var basis = new DistributedBasis(kInputBasisPath);
   var states = makeStates(basis);
   var matrix = new DistributedOperator(kInputBasisPath);
 
-  var mask = distributionMask(states, chunkSize = 10);
+  timer.start();
+  var mask = distributionMask(states, chunkSize = kDistributionChunkSize);
+  timer.stop();
+  writeln("[Chapel] distributionMask took ", timer.elapsed());
+
+  timer.clear();
+  timer.start();
   var X = distributeVectors(loadVectors(kInputDataPath, "/x")[0 ..# 1, ..], mask);
+  timer.stop();
+  writeln("[Chapel] loadVectors+distributeVectors took ", timer.elapsed());
+
+  timer.clear();
+  timer.start();
   var Y : [OnePerLocale] [X[0].domain] real(64);
+  writeln("[Chapel] initializing Y took ", timer.elapsed());
+  timer.stop();
+
   matvecSerial(matrix, states, X, Y);
-  writeln(Y);
+  if (kPrintOutput) {
+    writeln(Y);
+  }
 
   // coforall loc in Locales do on loc {
   //   writeln(matrix.requiredBufferSize());
@@ -44,8 +63,14 @@ proc main() {
   //   }
   // }
 
+  timer.clear();
+  timer.start();
   var YExpected = distributeVectors(loadVectors(kInputDataPath, "/y")[0 ..# 1, ..], mask);
-  writeln(YExpected);
+  timer.stop();
+  writeln("[Chapel] loadVectors+distributeVectors took ", timer.elapsed());
+  if kPrintOutput {
+    writeln(YExpected);
+  }
 
   var status : int = 0;
   for loc in Locales {
