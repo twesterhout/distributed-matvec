@@ -2,6 +2,7 @@ import h5py
 import lattice_symmetries as ls
 import numpy as np
 import os
+import time
 import yaml
 
 def load_hamiltonian(filename: str):
@@ -22,7 +23,10 @@ def generate(basis_filename: str, output_filename: str, batch_size: int = 1):
     hamiltonian.basis.build()
     x = np.random.rand(hamiltonian.basis.number_states, batch_size) - 0.5
     x = np.asfortranarray(x)
+    tick = time.time()
     y = hamiltonian(x)
+    tock = time.time()
+    print("{} spent in matrix-vector using OpenMP".format(tock - tick))
 
     with h5py.File(output_filename, "w") as out:
         out["/x"] = x.T
@@ -32,6 +36,7 @@ def generate(basis_filename: str, output_filename: str, batch_size: int = 1):
 def main():
     generate("data/heisenberg_chain_10.yaml", "data/matvec/heisenberg_chain_10.h5", 1)
     generate("data/heisenberg_square_5x5.yaml", "data/matvec/heisenberg_square_5x5.h5", 1)
+    generate("data/heisenberg_square_6x6.yaml", "data/matvec/heisenberg_square_6x6.h5", 1)
 
 if __name__ == '__main__':
     main()
