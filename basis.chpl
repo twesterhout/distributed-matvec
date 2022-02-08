@@ -44,6 +44,7 @@ class DistributedBasis {
   inline proc rawPtr() { return this._localBases[here.id].payload; }
   inline proc numberSpins() { return ls_get_number_spins(this.rawPtr()); }
   inline proc hammingWeight() { return ls_get_hamming_weight(this.rawPtr()); }
+  inline proc spinInversion() { return ls_get_spin_inversion(this.rawPtr()); }
   inline proc isHammingWeightFixed() { return this.hammingWeight() != -1; }
 
   proc statesBounds() {
@@ -58,6 +59,10 @@ class DistributedBasis {
       if (this.numberSpins() == 64) { upper = ~(0:uint(64)); }
       else { upper = (1:uint(64) << this.numberSpins()) - 1; }
     }
+    if spinInversion() != 0 {
+      upper = upper / 2;
+    }
+    assert(lower <= upper);
     return (lower, upper);
   }
 }
