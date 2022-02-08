@@ -54,12 +54,14 @@ class DistributedOperator {
     spins : [?D] uint(64),
     outOffsets : [] uint(64),
     outSpins : [] uint(64),
-    outCoeffs : [] complex(128))
+    outCoeffs : [] complex(128),
+    offset : int = 0,
+    count : int = spins.size)
      where spins.domain.rank == 1 &&
            outOffsets.domain.rank == 1 &&
            outSpins.domain.rank == 1 &&
            outCoeffs.domain.rank == 1 {
-    const count = spins.size;
+    // const count = spins.size;
     // writeln("spins=", spins);
     // writeln("outOffsets=", outOffsets);
     // writeln("outSpins=", outSpins);
@@ -73,8 +75,12 @@ class DistributedOperator {
     // assert(outSpins.locale == here);
     // assert(outCoeffs.locale == here);
     const status = ls_hs_operator_apply(
-      c_ptrTo(this._localOperators[here.id]), count:uint(64), c_ptrTo(spins),
-      c_ptrTo(outOffsets), c_ptrTo(outSpins), c_ptrTo(outCoeffs));
+      c_ptrTo(this._localOperators[here.id]),
+      count:uint(64),
+      c_ptrTo(spins[spins.domain.low + offset]),
+      c_ptrTo(outOffsets),
+      c_ptrTo(outSpins),
+      c_ptrTo(outCoeffs));
     assert(status == 0);
     // writeln("After:");
     // writeln("spins=", spins);
@@ -106,7 +112,8 @@ proc processBatch(count : int,
       const sj = info.spinsBatch[_j:int];
 
       var xj : eltType;
-      const localeId = (hash64_01(sj) % numLocales:uint):int;
+      // const localeId = (hash64_01(sj) % numLocales:uint):int;
+      const localeId = 0;
       // _timer.start();
       // on Locales[localeId] {
         // const ref representatives =
@@ -157,11 +164,12 @@ proc matvecSerial(matrix : DistributedOperator,
   const bufferSize = matrix.requiredBufferSize(batchSize);
   type eltType = X[0].eltType;
 
-  startVerboseMem();
+  // startVerboseMem();
   coforall loc in Locales do on loc {
     ref representatives = basisStates.getRepresentatives()[0 ..# basisStates.getCounts()];
     // basisStates.representatives[loc.id][0 ..# basisStates.counts[loc.id]];
     const numberChunks = (representatives.size + batchSize - 1) / batchSize;
+    writeln("[Chapel] locale ", loc.id, " has ", numberChunks, " chunks to process");
     var info = new TaskState(batchSize, bufferSize);
 
     var applyTime : atomic real = 0;
@@ -174,15 +182,19 @@ proc matvecSerial(matrix : DistributedOperator,
       // assert(n == 1);
       var applyTimer = new Timer();
       applyTimer.start();
-      batchedApply(matrix, representatives[i ..# n], info);
+      matrix.batchedApply(
+        representatives,
+        info.offsetsBatch,
+        info.spinsBatch,
+        info.coeffsBatch,
+        /*offset=*/i,
+        /*count=*/n);
       applyTimer.stop();
       applyTime.add(applyTimer.elapsed());
 
       var processTimer = new Timer();
       processTimer.start();
       const t = processBatch(n, info, basisStates, X);
-      processTimer.stop();
-      processTime.add(processTimer.elapsed());
       searchTime.add(t);
 
       if isSubtype(Y[loc.id].eltType, complex) {
@@ -198,12 +210,14 @@ proc matvecSerial(matrix : DistributedOperator,
           Y[loc.id][0, i + k] = info.ysBatch[k].re;
         }
       }
+      processTimer.stop();
+      processTime.add(processTimer.elapsed());
     }
     _applyTime[loc.id] = applyTime.read();
     _searchTime[loc.id] = searchTime.read();
     _processTime[loc.id] = processTime.read();
   }
-  stopVerboseMem();
+  // stopVerboseMem();
 
   _totalTimer.stop();
   writeln("[Chapel] matvecSerial took ", _totalTimer.elapsed());

@@ -13,12 +13,13 @@ config const kOutputDataPath = "output.h5";
 config const kDebugLatticeSymmetries = false;
 config const kDistributionChunkSize = 10000;
 config const kPrintOutput = false;
+config const kBits = 16;
 
 proc main() {
   initRuntime(false);
   var timer = new Timer();
   var basis = new DistributedBasis(kInputBasisPath);
-  var states = makeStates(basis);
+  var states = makeStates(basis, kBits);
   var matrix = new DistributedOperator(kInputBasisPath);
 
   timer.start();

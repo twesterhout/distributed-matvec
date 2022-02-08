@@ -53,40 +53,45 @@ inline proc nextStateGeneral(v: uint(64)): uint(64) {
   return v + 1;
 }
 
+inline proc nextState(v: uint(64), isHammingWeightFixed : bool): uint(64) {
+  return if isHammingWeightFixed then nextStateFixedHamming(v) else nextStateGeneral(v);
+}
+
 /* Fill buffer using either nextStateFixedHamming or nextStateGeneral. Returns
    the number of elements written.
  */
 inline proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64),
-                          nextStateFn: func(uint(64), uint(64))) {
+                          isHammingWeightFixed : bool) {
   assert(v <= bound);
   for i in buffer.domain {
     buffer[i] = v;
     // If v == bound, incrementing v further is unsafe because it can overflow.
     if (v == bound) { return i + 1; }
-    v = nextStateFn(v);
+    v = nextState(v, isHammingWeightFixed);
   }
   return buffer.size;
 }
 
-iter findStatesInRange(in lower: uint(64), upper: uint(64),
-                       nextStateFn: func(uint(64), uint(64)),
-                       basis: c_ptr(ls_spin_basis)) {
+inline iter findStatesInRange(in lower: uint(64), upper: uint(64),
+                              isHammingWeightFixed : bool,
+                              // nextStateFn: func(uint(64), uint(64)),
+                              basis: c_ptr(ls_spin_basis)) {
   /* C code will use SIMD, and it's beneficial to call ls_is_representative with
      count > 1. chunkSize controls the size of chunks which will be fed to
      ls_is_representative.
    */
-  const chunkSize = 1024;
+  const chunkSize = 10240;
   var buffer: [0 .. chunkSize - 1] uint(64);
   var flags: [0 .. chunkSize - 1] uint(8);
   while (true) {
-    const written = manyNextState(lower, upper, buffer, nextStateFn);
+    const written = manyNextState(lower, upper, buffer, isHammingWeightFixed);
     ls_is_representative(
         basis, written:uint, c_ptrTo(buffer), c_ptrTo(flags));
-    for i in {0..<written} {
+    for i in 0 ..# written {
       if (flags[i]:bool) { yield buffer[i]; }
     }
     if (buffer[written - 1] == upper) { break; }
-    lower = nextStateFn(buffer[written - 1]);
+    lower = nextState(buffer[written - 1], isHammingWeightFixed);
   }
 }
 

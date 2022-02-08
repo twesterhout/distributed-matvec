@@ -508,13 +508,13 @@ proc loadStates(filename : string, basisDataset : string,
 }
 */
 
-proc makeStates(basis: DistributedBasis) {
+proc makeStates(basis: DistributedBasis, bits : int = 16) {
   // startVdebug("makeStates");
 
   var timer = new Timer();
   timer.start();
   const (lower, upper) = basis.statesBounds();
-  const chunkSize = max((upper - lower) / 1000, 1);
+  const chunkSize = max((upper - lower) / (numLocales * here.maxTaskPar * 100):uint, 1);
   const ranges = splitIntoRanges(
     lower, upper, chunkSize, basis.isHammingWeightFixed());
   timer.stop();
@@ -529,16 +529,45 @@ proc makeStates(basis: DistributedBasis) {
 
   timer.clear();
   timer.start();
-  const nextStateFn: func(uint(64), uint(64));
-  if (basis.isHammingWeightFixed()) { nextStateFn = nextStateFixedHamming; }
-  else { nextStateFn = nextStateGeneral; }
-  forall ((lower, upper), chunk) in zip(ranges, chunks) with (in nextStateFn) {
-    assert(chunk.locale == here.locale);
-    for x in findStatesInRange(lower, upper, nextStateFn, basis.rawPtr()) {
-      const hash = (hash64_01(x) % numLocales:uint):int;
-      chunk[hash].append(x);
+  coforall loc in Locales do on loc {
+    var localIndices = chunks.localSubdomain(loc);
+
+    coforall tid in 0 ..# here.maxTaskPar {
+      for i in localIndices by here.maxTaskPar align tid {
+        const (lower, upper) = ranges[i];
+        ref chunk = chunks[i];
+
+        for x in findStatesInRange(lower, upper, basis.isHammingWeightFixed(),
+                                   basis.rawPtr()) {
+          const hash = (hash64_01(x) % numLocales:uint):int;
+          chunk[hash].append(x);
+        }
+      }
     }
+
+    // forall i in chunks.localSubdomain(loc) {
+    //   const (lower, upper) = ranges[i];
+    //   ref chunk = chunks[i];
+
+    //   for x in findStatesInRange(lower, upper, basis.isHammingWeightFixed(),
+    //                              basis.rawPtr()) {
+    //     const hash = (hash64_01(x) % numLocales:uint):int;
+    //     chunk[hash].append(x);
+    //   }
+    // }
+
+    // for i in chunks.localSubdomain(loc) {
+    //   const totalWritten = + reduce ([j in LocaleSpace] chunks[i][j].size);
+    //   writeln("locale ");
+    // }
   }
+  // forall ((lower, upper), chunk) in zip(ranges, chunks) with (in nextStateFn) {
+  //   assert(chunk.locale == here.locale);
+  //   for x in findStatesInRange(lower, upper, nextStateFn, basis.rawPtr()) {
+  //     const hash = (hash64_01(x) % numLocales:uint):int;
+  //     chunk[hash].append(x);
+  //   }
+  // }
   timer.stop();
   writeln("[Chapel] Constructed all chunks in ", timer.elapsed());
 
@@ -566,7 +595,7 @@ proc makeStates(basis: DistributedBasis) {
   // stopVdebug();
 
   // NOTE: this creates a copy of states, right? :(
-  return new BasisStates(basis.numberSpins(), states, counts);
+  return new BasisStates(basis.numberSpins(), states, counts, bits);
 }
 
 config const yamlPath = "/home/tom/src/spin-ed/example/heisenberg_pyrochlore_32.yaml";
