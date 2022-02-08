@@ -12,8 +12,8 @@ all: basis
 # libplugin.a: plugin.o
 # 	$(AR) rcs $@ $^
 
-# test: test.chpl states.chpl libplugin.a
-# 	chpl -o $@ -L. -lplugin $(LDFLAGS) plugin.h $<
+test: test.chpl
+	chpl $(OPTIMIZATION) -o $@ $^
 
 # basis: basis.chpl states.chpl
 # 	chpl $(CFLAGS) --main-module basis -o $@ $^ $(LDFLAGS) 
@@ -44,7 +44,14 @@ check_io: test_basis_construction test_vector_loading $(DATA_FILES)
 	  done; \
 	done
 
-test_basis_construction: test_basis_construction.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl
+test_matvec: test_matvec.chpl matvec.chpl Distribute.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl
+	CHPL_TARGET_CPU=native chpl \
+		$(CFLAGS) \
+		-o $@ $^ \
+		--main-module $@ \
+		$(LDFLAGS)
+
+test_basis_construction: test_basis_construction.chpl Distribute.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl
 	CHPL_TARGET_CPU=native chpl \
 		$(CFLAGS) \
 		-o $@ $^ \
