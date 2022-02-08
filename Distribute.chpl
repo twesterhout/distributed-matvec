@@ -16,6 +16,21 @@ module Distribute {
     return mask;
   }
 
+  proc distributionMask(const ref states : BasisStates, chunkSize : int) {
+    const totalCount = + reduce states.counts;
+    const D : domain(1) dmapped Block(LocaleSpace) = {0 ..# totalCount};
+    var mask : [D] int;
+    forall (offset, indices) in kMergeIndicesChunked(states.representatives,
+                                                     states.counts, chunkSize) {
+      mask[offset ..# indices.size] = [i in indices.domain] indices[i][0];
+    }
+    // writeln(D);
+    // for i in LocaleSpace {
+    //   writeln(mask[mask.localSubdomain(Locales[i])]);
+    // }
+    return mask;
+  }
+
   private proc distributionCounts(const ref mask : [] int) {
     var histogram : [LocaleSpace] int;
     forall i in mask with (+ reduce histogram) {

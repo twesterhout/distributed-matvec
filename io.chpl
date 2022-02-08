@@ -316,9 +316,10 @@ module MatVec {
       assert(_shape.size == 2);
       const numberVectors = _shape[0];
       const totalNumberStates = _shape[1];
-     
-      const D : domain(2) dmapped Block({0 ..# 1, 0 ..# numLocales}) =
-        {0 ..# numberVectors, 0 ..# totalNumberStates};
+    
+      const boundingBox = {0 ..# numberVectors, 0 ..# totalNumberStates};
+      const targetLocales = reshape(Locales, {0 ..# 1, 0 ..# numLocales});
+      const D : domain(2) dmapped Block(boundingBox, targetLocales) = boundingBox;
       var vectors : [D] eltType;
       coforall loc in Locales do on loc {
         const indices = vectors.localSubdomain();

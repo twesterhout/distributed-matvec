@@ -133,10 +133,11 @@ module Merge {
       offset += chunkSize;
     }
     if (bounds.last() != upper || bounds.size < 2) { bounds.append(upper); }
-    writeln("chunkBounds: ", bounds);
+    // writeln("chunkBounds: ", bounds);
     return bounds;
   }
   private proc chunkOffsets(const ref arrays, const ref counts, chunkSize : int) {
+    writeln("[Chapel] kMerge using chunkSize=", chunkSize);
     const bounds = chunkBounds(arrays, counts, chunkSize);
 
     var offsets : [0 ..# counts.size, 0 ..# bounds.size] int;
@@ -149,8 +150,8 @@ module Merge {
         offsets[i, j] = location;
       }
     }
-    writeln("chunkOffsets:");
-    writeln(offsets);
+    // writeln("chunkOffsets:");
+    // writeln(offsets);
     return offsets;
 
     // forall j in 0 ..# bounds.size - 1 {
@@ -173,8 +174,8 @@ module Merge {
       localArrays[i, 0 ..# localCounts[i]] =
         indexAccess(arrays, i, offsets[i, chunkId] .. offsets[i, chunkId + 1] - 1);
     }
-    writeln("chunkId=", chunkId, " localArrays:");
-    writeln(localArrays);
+    // writeln("chunkId=", chunkId, " localArrays:");
+    // writeln(localArrays);
     var localMergeIndices : [0 ..# totalLocalCount] (int, int);
     for ((arrayIndex, indexInArray), j) in zip(kMergeIndices(localArrays, localCounts),
                                                localMergeIndices) {

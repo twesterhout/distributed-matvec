@@ -21,18 +21,23 @@ class DistributedBasis {
     complete();
 
     coforall loc in Locales do on loc {
-      const localPath = path;
       var dummyHamiltonian = new ls_hs_operator_v1(nil, nil);
       ls_hs_basis_and_hamiltonian_from_yaml(
-        localPath.c_str(), c_ptrTo(this._localBases[loc.id]), c_ptrTo(dummyHamiltonian));
+        path.localize().c_str(), c_ptrTo(this._localBases[loc.id]), c_ptrTo(dummyHamiltonian));
       ls_hs_destroy_operator(c_ptrTo(dummyHamiltonian));
+    }
+    writeln("Bases: ");
+    for o in this._localBases {
+      writeln(o);
     }
   }
 
   proc deinit() {
-    coforall loc in Locales do on loc {
+    for loc in Locales do on loc {
+      writeln("[Chapel] ls_hs_destroy_operator on Locales[", loc.id, "] ...");
       ls_hs_destroy_spin_basis(c_ptrTo(this._localBases[loc.id]));
     }
+    writeln("[Chapel] DistributedBasis.deinit is done");
   }
 
   inline proc rawPtr() { return this._localBases[here.id].payload; }

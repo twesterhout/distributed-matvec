@@ -63,15 +63,17 @@ extern proc ls_hs_hdf5_read_chunk_f64(path: c_string, dataset: c_string,
 proc initRuntime(withLogging : bool) {
   for loc in Locales do on loc {
     if (withLogging) { ls_enable_logging(); }
-    // writeln("[Chapel] Calling ls_hs_init ...");
+    writeln("[Chapel] Calling ls_hs_init on Locales[", loc.id, "] ...");
     ls_hs_init();
+    writeln("[Chapel] ls_hs_init on Locales[", loc.id, "] is done");
   }
 }
 
 proc deinitRuntime() {
   for loc in Locales do on loc {
-    // writeln("[Chapel] Calling ls_hs_exit ...");
+    writeln("[Chapel] Calling ls_hs_exit on Locales[", loc.id, "] ...");
     ls_hs_exit();
+    writeln("[Chapel] ls_hs_exit on Locales[", loc.id, "] is done");
   }
 }
 
@@ -130,11 +132,11 @@ proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltT
     c_shape[i] = array.dim(i).size:uint;
   }
   if (eltType == uint(64)) {
-    ls_hs_hdf5_read_chunk_u64(filename.localize().c_str(), dataset.c_str(),
+    ls_hs_hdf5_read_chunk_u64(filename.localize().c_str(), dataset.localize().c_str(),
       rank:c_uint, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(array));
   }
   else if (eltType == real(64)) {
-    ls_hs_hdf5_read_chunk_f64(filename.localize().c_str(), dataset.c_str(),
+    ls_hs_hdf5_read_chunk_f64(filename.localize().c_str(), dataset.localize().c_str(),
       rank:c_uint, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(array));
   }
   else {
