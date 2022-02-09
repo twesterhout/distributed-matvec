@@ -5,6 +5,8 @@ use Search;
 use CPtr;
 use Time;
 use states only hash64_01;
+use profiling;
+use CommDiagnostics;
 use Memory.Diagnostics;
 
 config const kBatchSize = 1;
@@ -99,29 +101,127 @@ record TaskState {
   var ysBatch : [0 ..# batchSize] complex(128);
 }
 
+var processBatchTimer = new MeasurementTable("processBatch");
+var processBatchTimer_1 = new MeasurementTable("processBatch::1");
+var processBatchTimer_2 = new MeasurementTable("processBatch::2");
+var processBatchTimer_3 = new MeasurementTable("processBatch::3");
+var processBatchTimer_4 = new MeasurementTable("processBatch::4");
+var copyToHere = new MeasurementTable("copyToHere");
+var getIndexTimer = new MeasurementTable("getIndex");
+
+var _constructTargetsTime = new MeasurementTable("_constructTargetsTimer");
+var _constructOffsetsTime = new MeasurementTable("_constructOffsetsTimer");
+var _processLocalTargetsTime = new MeasurementTable("_processLocalTargetsTimer");
+var _processResultsTime = new MeasurementTable("_processResultsTimer");
+
+class BatchProcessor {
+  var bufferSize : int;
+  var targets : [LocaleSpace] [0 ..# bufferSize] (int, uint(64), complex(128));
+  var targetSizes : [LocaleSpace] int;
+  var offsets : [0 ..# numLocales + 1] int;
+  var results : [0 ..# bufferSize] (int, complex(128));
+
+  proc init(bufferSize : int) {
+    this.bufferSize = bufferSize;
+  }
+
+  proc _constructTargets(count : int, const ref info : TaskState) {
+    var __timer = getTimerFor(_constructTargetsTime);
+    for k in 0 ..# count {
+      for j in info.offsetsBatch[k]:int .. info.offsetsBatch[k + 1]:int - 1 {
+        const sj = info.spinsBatch[j];
+        const cj = info.coeffsBatch[j];
+        const localeId = (hash64_01(sj) % numLocales:uint):int;
+        targets[localeId][targetSizes[localeId]] = (k, sj, cj);
+        targetSizes[localeId] += 1;
+      }
+    }
+  }
+
+  proc _constructOffsets() {
+    var __timer = getTimerFor(_constructOffsetsTime);
+    var n : int = 0;
+    offsets[0] = n;
+    for locId in LocaleSpace {
+      n += targetSizes[locId];
+      offsets[locId + 1] = n;
+    }
+  }
+
+  proc _processLocalTargets(const ref localTargets : [] (int, uint(64), complex(128)),
+                            ref localResults : [] (int, complex(128)),
+                            const ref basisStates,
+                            const ref X) {
+    var __timer = getTimerFor(_processLocalTargetsTime);
+    const ref localX = X[here.id];
+    // would like to use vectorizeOnly, but it does not work with const ref
+    for ((k, sj, cj), r) in zip(localTargets, localResults) {
+      const j = basisStates.getIndex(sj);
+      const xj = localX[0, j];
+      r = (k, cj * xj);
+    }
+  }
+
+  proc _processResults(ref info : TaskState) {
+    var __timer = getTimerFor(_processResultsTime);
+    info.ysBatch = 0;
+    for (k, yk) in vectorizeOnly(results[0 ..# offsets[numLocales]]) {
+      info.ysBatch[k] += yk;
+    }
+  }
+
+  proc process(count : int,
+               ref info : TaskState,
+               const ref basisStates : BasisStates,
+               const ref X) {
+    _constructTargets(count, info);
+    _constructOffsets();
+    coforall loc in Locales do on loc {
+      const localTargets = targets[loc.id][0 ..# targetSizes[loc.id]];
+      var localResults : [0 ..# localTargets.size] (int, complex(128));
+      _processLocalTargets(localTargets, localResults, basisStates, X);
+      results[offsets[loc.id] .. offsets[loc.id + 1] - 1] = localResults;
+    }
+    _processResults(info);
+  }
+};
+
 proc processBatch(count : int,
                   ref info : TaskState,
                   const ref basisStates : BasisStates,
                   const ref X) {
-  var timer = new Timer();
+  var _timer = new ScopedTimer(processBatchTimer);
   type eltType = X[0].eltType;
 
-  var targets : [0 ..# numLocales, 0 ..# info.bufferSize] (int, uint(64));
+  var _timer_1 = new ScopedTimer(processBatchTimer_1);
+  var targets : [0 ..# numLocales] [0 ..# info.bufferSize] (int, uint(64));
   var targetsSizes : [LocaleSpace] int;
-  var results : [0 ..# info.bufferSize] eltType;
-  for i in 0 ..# info.offsetsBatch[count]:int {
-    const sj = info.spinsBatch[i];
+  var results : [0 ..# info.bufferSize] real;
+  _timer_1.stop();
+  var _timer_2 = new ScopedTimer(processBatchTimer_2);
+  for j in 0 ..# info.offsetsBatch[count]:int {
+    const sj = info.spinsBatch[j];
+    const xj = info.coeffsBatch[j];
     const localeId = (hash64_01(sj) % numLocales:uint):int;
-    targets[localeId, targetsSizes[localeId]] = (i, sj);
+    targets[localeId][targetsSizes[localeId]] = (j, sj);
     targetsSizes[localeId] += 1;
   }
-  coforall loc in Locales do on loc {
-    const localTargets = targets[loc.id, 0 ..# targetsSizes[loc.id]];
+  _timer_2.stop();
+  var _timer_3 = new ScopedTimer(processBatchTimer_3);
+  // startVerboseComm();
+  coforall loc in Locales with (ref copyToHere, ref getIndexTimer) do on loc {
+    var _t_1 = new ScopedTimer(copyToHere);
+    const localTargets = targets[loc.id][0 ..# targetsSizes[loc.id]];
+    _t_1.stop();
+    var _t_2 = new ScopedTimer(getIndexTimer);
     for (i, sj) in localTargets {
       results[i] = X[loc.id][0, basisStates.getIndex(sj)];
     }
   }
+  // stopVerboseComm();
+  _timer_3.stop();
 
+  var _timer_4 = new ScopedTimer(processBatchTimer_4);
   for k in 0 ..# count {
     var yk : complex(128) = 0;
     for _j in info.offsetsBatch[k] .. info.offsetsBatch[k + 1] - 1 {
@@ -131,7 +231,7 @@ proc processBatch(count : int,
     }
     info.ysBatch[k] = yk;
   }
-  return timer.elapsed();
+  _timer_4.stop();
 }
 
 inline proc batchedApply(matrix : DistributedOperator, ref spins, ref s : TaskState) {
@@ -160,8 +260,10 @@ proc matvecSerial(matrix : DistributedOperator,
   const batchSize = kBatchSize; // max(1, basisStates.size / (10 * loc.maxTaskPar));
   const bufferSize = matrix.requiredBufferSize(batchSize);
   type eltType = X[0].eltType;
+  writeln("[Chapel] batchSize = ", batchSize, ", bufferSize = ", bufferSize);
 
   // startVerboseMem();
+  // startVerboseComm();
   coforall loc in Locales do on loc {
     ref representatives = basisStates.getRepresentatives()[0 ..# basisStates.getCounts()];
     // basisStates.representatives[loc.id][0 ..# basisStates.counts[loc.id]];
@@ -191,8 +293,9 @@ proc matvecSerial(matrix : DistributedOperator,
 
       var processTimer = new Timer();
       processTimer.start();
-      const t = processBatch(n, info, basisStates, X);
-      searchTime.add(t);
+      var batchProcessor = new BatchProcessor(info.bufferSize);
+      batchProcessor.process(n, info, basisStates, X);
+      // processBatch(n, info, basisStates, X);
 
       if isSubtype(Y[loc.id].eltType, complex) {
         Y[loc.id][0, i ..# n] = info.ysBatch[0 ..# n];
@@ -214,9 +317,14 @@ proc matvecSerial(matrix : DistributedOperator,
     _searchTime[loc.id] = searchTime.read();
     _processTime[loc.id] = processTime.read();
   }
+  // stopVerboseComm();
   // stopVerboseMem();
 
   _totalTimer.stop();
+  _constructTargetsTime.print();
+  _constructOffsetsTime.print();
+  _processLocalTargetsTime.print();
+  _processResultsTime.print();
   writeln("[Chapel] matvecSerial took ", _totalTimer.elapsed());
   writeln("[Chapel]     ", _applyTime, " spent in matrix.batchedApply");
   writeln("[Chapel]     ", _searchTime, " spent in searching for indices");

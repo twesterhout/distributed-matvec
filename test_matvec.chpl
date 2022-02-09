@@ -76,11 +76,22 @@ proc main() {
 
   var status : int = 0;
   for loc in Locales {
-    const equal = && reduce (Y[loc.id] == YExpected[loc.id]);
-    if !equal {
+    const error = max reduce abs(Y[loc.id] - YExpected[loc.id]);
+    const norm = max reduce abs(YExpected[loc.id]);
+    if (error >= 1e-15 * norm) {
       writeln("[Chapel] ERROR: Y and YExpected do not match!"); 
       status = 1;
     }
+    // const equal = && reduce (Y[loc.id] == YExpected[loc.id]);
+    // if !equal {
+    //   for (y, yExpected) in zip(Y[loc.id], YExpected[loc.id]) {
+    //     if (y != yExpected) {
+    //       writeln(y, " != ", yExpected, " (Δ = ", yExpected - y, ")");
+    //     }
+    //   }
+    //   writeln("[Chapel] ERROR: Y and YExpected do not match!"); 
+    //   status = 1;
+    // }
   }
   return status;
 }

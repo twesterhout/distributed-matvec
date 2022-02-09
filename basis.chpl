@@ -27,18 +27,12 @@ class DistributedBasis {
         path.localize().c_str(), c_ptrTo(this._localBases[loc.id]), c_ptrTo(dummyHamiltonian));
       ls_hs_destroy_operator(c_ptrTo(dummyHamiltonian));
     }
-    writeln("Bases: ");
-    for o in this._localBases {
-      writeln(o);
-    }
   }
 
   proc deinit() {
-    for loc in Locales do on loc {
-      writeln("[Chapel] ls_hs_destroy_operator on Locales[", loc.id, "] ...");
+    coforall loc in Locales do on loc {
       ls_hs_destroy_spin_basis(c_ptrTo(this._localBases[loc.id]));
     }
-    writeln("[Chapel] DistributedBasis.deinit is done");
   }
 
   inline proc rawPtr() { return this._localBases[here.id].payload; }
