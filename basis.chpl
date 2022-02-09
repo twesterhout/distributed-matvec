@@ -90,6 +90,7 @@ class BasisStates {
       var offset = 0;
       for i in 0 ..# numberBuckets {
         localRanges[i] = offset;
+        // writeln("ranges[", loc.id, "][", i, "] = ", offset);
         while offset != localStates.size && bucketIndex(localStates[offset]) == i {
           offset += 1;
         }
@@ -104,7 +105,7 @@ class BasisStates {
     this._representatives = representatives;
     this._counts = counts;
     this._numberSpins = numberSpins;
-    this._numberBits = numberBits;
+    this._numberBits = min(numberSpins, numberBits);
     this._shift = makeShift(numberSpins, numberBits);
     this.complete();
     _generateBucketRanges();
@@ -138,7 +139,13 @@ class BasisStates {
     // ref r = getRepresentatives(loc)[_ranges[loc.id][i] .. _ranges[loc.id][i + 1] - 1];
     const dataPtr = c_ptrTo(_representatives[loc.id][b]);
     const size = (e - b):uint(64);
-    const j = ls_binary_search(dataPtr, size, x);
+    var j : uint(64);
+    if loc != here {
+      on loc { j = ls_binary_search(dataPtr, size, x); }
+    }
+    else {
+      j = ls_binary_search(dataPtr, size, x);
+    }
     assert(j < size);
     // const (found, j) = binarySearch(r, x);
     // writeln("found=", found, ", sj=", sj, ", representatives=", representatives);
@@ -519,7 +526,7 @@ proc makeStates(basis: DistributedBasis, bits : int = 16) {
   var timer = new Timer();
   timer.start();
   const (lower, upper) = basis.statesBounds();
-  const chunkSize = max((upper - lower) / (numLocales * here.maxTaskPar * 100):uint, 1);
+  const chunkSize = max((upper - lower) / (numLocales * here.maxTaskPar * 5):uint, 1);
   const ranges = splitIntoRanges(
     lower, upper, chunkSize, basis.isHammingWeightFixed());
   timer.stop();
@@ -536,12 +543,11 @@ proc makeStates(basis: DistributedBasis, bits : int = 16) {
   timer.start();
   coforall loc in Locales do on loc {
     var localIndices = chunks.localSubdomain(loc);
-
     coforall tid in 0 ..# here.maxTaskPar {
-      for i in localIndices by here.maxTaskPar align tid {
+      var taskIndices = localIndices by here.maxTaskPar align (tid * numLocales + loc.id);
+      for i in taskIndices {
         const (lower, upper) = ranges[i];
         ref chunk = chunks[i];
-
         for x in findStatesInRange(lower, upper, basis.isHammingWeightFixed(),
                                    basis.rawPtr()) {
           const hash = (hash64_01(x) % numLocales:uint):int;
@@ -549,23 +555,36 @@ proc makeStates(basis: DistributedBasis, bits : int = 16) {
         }
       }
     }
-
-    // forall i in chunks.localSubdomain(loc) {
-    //   const (lower, upper) = ranges[i];
-    //   ref chunk = chunks[i];
-
-    //   for x in findStatesInRange(lower, upper, basis.isHammingWeightFixed(),
-    //                              basis.rawPtr()) {
-    //     const hash = (hash64_01(x) % numLocales:uint):int;
-    //     chunk[hash].append(x);
-    //   }
-    // }
-
-    // for i in chunks.localSubdomain(loc) {
-    //   const totalWritten = + reduce ([j in LocaleSpace] chunks[i][j].size);
-    //   writeln("locale ");
-    // }
   }
+  timer.stop();
+  writeln("[Chapel] Constructed all chunks in ", timer.elapsed());
+
+  timer.clear();
+  timer.start();
+  var maxPerChunk = max reduce ([i in D] (
+                      max reduce ([j in LocaleSpace]
+                        chunks[i][j].size)));
+  timer.stop();
+  writeln("[Chapel] maxPerChunk = ", maxPerChunk, " in ", timer.elapsed());
+  timer.clear();
+  timer.start();
+  var arrChunks: [D] [LocaleSpace] [0 ..# maxPerChunk] uint(64);
+  var arrSizes: [D] [LocaleSpace] int;
+  timer.stop();
+  writeln("[Chapel] allocated arrChunks and arrSizes in ", timer.elapsed());
+
+  timer.clear();
+  timer.start();
+  forall i in D {
+    forall j in LocaleSpace {
+      const n = chunks[i][j].size;
+      arrChunks[i][j][0 ..# n] = chunks[i][j];
+      arrSizes[i][j] = n;
+    }
+  }
+  timer.stop();
+  writeln("[Chapel] Converted chunks to arrays in ", timer.elapsed());
+
   // forall ((lower, upper), chunk) in zip(ranges, chunks) with (in nextStateFn) {
   //   assert(chunk.locale == here.locale);
   //   for x in findStatesInRange(lower, upper, nextStateFn, basis.rawPtr()) {
@@ -573,8 +592,6 @@ proc makeStates(basis: DistributedBasis, bits : int = 16) {
   //     chunk[hash].append(x);
   //   }
   // }
-  timer.stop();
-  writeln("[Chapel] Constructed all chunks in ", timer.elapsed());
 
   timer.clear();
   timer.start();
@@ -588,10 +605,11 @@ proc makeStates(basis: DistributedBasis, bits : int = 16) {
   var states: [OnePerLocale] [0 ..# maxCount] uint(64);
   coforall loc in Locales do on loc {
     var offset: int = 0;
-    for i in {0..<ranges.size} {
-      var c = chunks[i][loc.id].size;
-      states[loc.id][offset .. offset + c - 1] = chunks[i][loc.id];
+    for i in 0 ..# ranges.size {
+      var c = arrSizes[i][loc.id]; // chunks[i][loc.id].size;
+      states[loc.id][offset ..# c] = arrChunks[i][loc.id][0 ..# c];
       offset += c;
+      // writeln("chunks[", i, "][", loc.id, "] = ", chunks[i][loc.id]);
     }
   }
   timer.stop();

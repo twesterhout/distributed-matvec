@@ -21,6 +21,7 @@ proc main() {
   var basis = new DistributedBasis(kInputBasisPath);
   var states = makeStates(basis, kBits);
   var matrix = new DistributedOperator(kInputBasisPath);
+  writeln("[Chapel] Hilbert space dimension is ", states.totalNumberStates());
 
   timer.start();
   var mask = distributionMask(states, chunkSize = kDistributionChunkSize);

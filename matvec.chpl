@@ -106,32 +106,29 @@ proc processBatch(count : int,
   var timer = new Timer();
   type eltType = X[0].eltType;
 
+  var targets : [0 ..# numLocales, 0 ..# info.bufferSize] (int, uint(64));
+  var targetsSizes : [LocaleSpace] int;
+  var results : [0 ..# info.bufferSize] eltType;
+  for i in 0 ..# info.offsetsBatch[count]:int {
+    const sj = info.spinsBatch[i];
+    const localeId = (hash64_01(sj) % numLocales:uint):int;
+    targets[localeId, targetsSizes[localeId]] = (i, sj);
+    targetsSizes[localeId] += 1;
+  }
+  coforall loc in Locales do on loc {
+    const localTargets = targets[loc.id, 0 ..# targetsSizes[loc.id]];
+    for (i, sj) in localTargets {
+      results[i] = X[loc.id][0, basisStates.getIndex(sj)];
+    }
+  }
+
   for k in 0 ..# count {
     var yk : complex(128) = 0;
     for _j in info.offsetsBatch[k] .. info.offsetsBatch[k + 1] - 1 {
-      const sj = info.spinsBatch[_j:int];
-
-      var xj : eltType;
-      // const localeId = (hash64_01(sj) % numLocales:uint):int;
-      const localeId = 0;
-      // _timer.start();
-      // on Locales[localeId] {
-        // const ref representatives =
-        //   basisStates.representatives[localeId][0 ..# basisStates.counts[localeId]];
-        // ref r = basisStates.getRepresentatives(Locales[localeId])[0 ..# basisStates.getCounts(Locales[localeId])];
-        // const (found, j) = binarySearch(r, sj);
-        // writeln("found=", found, ", sj=", sj, ", representatives=", representatives);
-        // assert(found);
-        timer.start();
-        const j = basisStates.getIndex(sj, Locales[localeId]);
-        timer.stop();
-        xj = X[localeId][0, j];
-      // }
-      // _timer.stop();
-
-      yk += info.coeffsBatch[_j:int] * xj;
+      const xj = results[_j:int];
+      const cj = info.coeffsBatch[_j:int];
+      yk += cj * xj;
     }
-
     info.ysBatch[k] = yk;
   }
   return timer.elapsed();
