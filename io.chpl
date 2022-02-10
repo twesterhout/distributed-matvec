@@ -6,234 +6,10 @@ module MatVec {
     use Time;
     use BlockDist;
     use Merge;
+    use profiling;
 
     config const kMergeChunkSize : int = 5;
     // config const kLoadChunkSize : int = 10 * 1024 / numLocales;
-
-    /*
-    module MergeAndWrite {
-      import MatVec.IO.kMergeChunkSizeScale;
-      use List;
-      use Merge;
-
-      private proc indicesForBounds(states : [?D] ?eltType, bounds: [?D2] ?eltType2)
-        where (eltType == eltType2 && D.rank == 1 && D2.rank == 1) {
-
-        assert(states.size > 0 && bounds.size > 1);
-        assert(bounds[0] <= states[0]);
-        assert(bounds[bounds.size - 1] >= states[states.size - 1]);
-        var edges : [0 .. bounds.size - 1] int;
-        edges[0] = 0;
-        edges[edges.size - 1] = states.size;
-        for i in 1 .. bounds.size - 2 {
-          // TODO: can be improved by setting stricter bounds where to search
-          const (found, location) = binarySearch(states, bounds[i]);
-          edges[i] = location;
-        }
-        return edges;
-      }
-
-      private globalChunkBounds(lower : eltType, upper : eltType,
-                                chunkSize : int, const ref array : [] ?eltType) {
-        assert(lower <= upper);
-        assert(chunkSize >= 1);
-        var bounds : list(eltType);
-        bounds.append(lower);
-        var offset = chunkSize;
-        while (offset < array.size) {
-          bounds.append(array[offset]);
-          offset += chunkSize;
-        }
-        return bounds;
-      }
-      private iter localChunks(param tag: iterKind,
-                               const ref states : BasisStates, chunkSize : int)
-          where tag == iterKind.standalone {
-        assert(chunkSize >= 1);
-        const D = states.representatives.domain;
-        const ref representatives = states.representatives;
-        const ref counts = states.counts;
-        const lower = min reduce [i in D1] representatives[i][0];
-        const upper = max reduce [i in D1] representatives[i][counts[i] - 1];
-        const bounds = globalChunkBounds(lower, upper, chunkSize,
-                                         representatives[0][0 ..# counts[0]]);
-
-        var offsets : [0 ..# counts.size, 0 ..# bounds.size] int;
-        forall i in counts.domain {
-          offsets[i, 0] = 0;
-          offsets[i, bounds.size - 1] = counts[i];
-          for j in 1 .. bounds.size - 2 {
-            const (_found, location) = binarySearch(
-              representatives[i][0 ..# counts[i]], bounds[j]);
-            offsets[i, j] = location;
-          }
-        }
-
-        forall j in 0 ..# bounds.size - 1 {
-          const chunk : [0 ..# counts.size] (int, int) =
-            [i in offsets.dim(0)] (offsets[i, j], offsets[i, j + 1]);
-          yield chunk;
-        }
-      }
-
-      private proc chunkToIndices(const ref states, const ref counts) {
-        const totalCount = + reduce counts;
-        var indices : [0 ..# totalCount] (int, int) = kmergeIndices(states, counts);
-        return indices;
-      }
-      private iter mergeIndicesChunks(param tag: iterKind,
-                                      const ref states : BasisStates, chunkSize : int)
-          where tag == iterKind.standalone {
-
-          forall offsets in localChunks(states, chunkSize) {
-            const localCounts = [i in offsets.domain] (offsets[i][1] - offsets[i][0]);
-            const maxLocalCount = max reduce localCounts;
-            var localStates : [0 ..# localCounts.size, 0 ..# maxLocalCount] eltType;
-            for i in localStates.dim(0) {
-              localStates[i, 0 ..# localCounts[i]] =
-                states[i][offsets[i][0] .. offsets[i][1] - 1];
-            }
-            const totalLocalCount = + reduce localCounts;
-            var indices : [0 ..# totalLocalCount] (int, int) = kmergeIndices(states, counts);
-          }
-      }
-
-
-      private proc computeBounds(states : [?D] ?eltType, lower : eltType,
-                                 upper : eltType, chunkSize : int) where (D.rank == 1) {
-
-        var bounds : list(eltType);
-        bounds.append(lower);
-        var offset = chunkSize;
-        while (offset < states.size) {
-          bounds.append(states[offset]);
-          offset += chunkSize;
-        }
-        bounds.append(upper);
-
-        var bounds_array : [0 .. bounds.size - 1] eltType = bounds;
-        return bounds_array;
-      }
-
-      private proc computeRanges(const ref states, const ref counts : [] int) {
-        assert(states.domain.dim(0) == counts.domain.dim(0));
-        const D1 = states.domain.dim(0);
-        const lower = min reduce [i in D1] states[i][0];
-        const upper = max reduce [i in D1] states[i][counts[i] - 1];
-        // TODO: why are we using the first array to determine chunkSize?
-        //       it's probably better to use the longest array instead.
-        const chunkSize = max((kMergeChunkSizeScale * counts[0] / numLocales):int, 1);
-        const bounds = computeBounds(states[0][.. counts[0] - 1], lower, upper, chunkSize);
-        var edges : [0 .. D1.size - 1, 0 .. bounds.size - 1] int;
-        for i in D1 do on counts[i] {
-          edges[i, ..] = indicesForBounds(states[i][0 .. counts[i] - 1], bounds);
-        }
-        return edges;
-      }
-
-      private proc computeOffsets(indexEdges : [?D] int) where (D.rank == 2) {
-        const numberRanges = indexEdges.dim(1).size - 1;
-        var offsets : [0 .. numberRanges] uint(64);
-        offsets[0] = 0;
-        for j in 1 .. numberRanges {
-          const n = (+ reduce [i in indexEdges.dim(0)] indexEdges[i, j] - indexEdges[i, j - 1]);
-          offsets[j] = offsets[j - 1] + n:uint;
-        }
-        return offsets;
-      }
-
-      private proc localMerge(localStates : [?D] ?eltType, localVectors : nothing,
-                              localCounts : [?D2] int)
-          where (D.rank == 2 && D2.rank == 1) {
-        assert(D.dim(0).size == D2.size);
-        const totalCount = + reduce localCounts;
-        var combined : [0 .. totalCount - 1] eltType = kmerge(localStates, localCounts);
-        return combined;
-      }
-      private proc localMerge(localStates : [?D] ?eltType, localVectors : [?D2] ?eltType2,
-                              localCounts : [?D3] int)
-          where (D.rank == 2 && D2.rank == 3 && D3.rank == 1) {
-        assert(D.dim(0).size == D3.size);
-        assert(D2.dim(0).size == D3.size);
-        assert(D.dim(1).size == D2.dim(2).size);
-        const numberVectors = D2.dim(1).size;
-        const totalCount = + reduce localCounts;
-        var combined : [0 ..# numberVectors, 0 ..# totalCount] eltType2 = noinit;
-        for ((chunkIndex, indexInChunk), j) in zip(kmergeIndices(localStates, localCounts), 0..) {
-          for i in 0 ..# numberVectors {
-            combined[i, j] = localVectors[chunkIndex, i, indexInChunk];
-          }
-        }
-        return combined;
-      }
-
-      private proc createLocalCopyForMerge(counts, maxLocalCount : int, k : int, offsets,
-                                           states) {
-        type eltType = states[0].eltType;
-        var localStates : [0 ..# states.size, 0 ..# maxLocalCount] eltType;
-        for i in localStates.dim(0) {
-          localStates[i, 0 ..# counts[i]] = states[i][offsets[i, k] .. offsets[i, k + 1] - 1];
-        }
-        return (localStates, none);
-      }
-      private proc createLocalCopyForMerge(counts, maxLocalCount : int, k : int, offsets,
-                                           states, vectors) {
-        const (localStates, _) = createLocalCopyForMerge(counts, maxLocalCount, k, offsets, states);
-        const numberVectors = vectors[0].dim(0).size;
-        type eltType = vectors[0].eltType;
-        var localVectors : [0 ..# vectors.size, 0 ..# numberVectors, 0 ..# maxLocalCount] eltType;
-        for i in localVectors.dim(0) {
-          localVectors[i, .., 0 ..# counts[i]] =
-            vectors[i][.., offsets[i, k] .. offsets[i, k + 1] - 1];
-        }
-        return (localStates, localVectors);
-      }
-
-      private proc createDatasets(counts, filename, datasets: (nothing, string), states, vectors) {
-        const totalCount = (+ reduce counts);
-        const numberVectors = vectors[0].dim(0).size;
-        // createHDF5Dataset(filename, dataset[0], states[0].eltType, (totalCount,));
-        createHDF5Dataset(filename, datasets[1], vectors[0].eltType, (numberVectors, totalCount));
-      }
-      private proc createDatasets(counts, filename, datasets: (string, nothing), states) {
-        const totalCount = (+ reduce counts);
-        createHDF5Dataset(filename, datasets[0], states[0].eltType, (totalCount,));
-      }
-
-      private proc writeChunk(filename, datasets: (string, nothing), offset : int, combined) {
-        writeHDF5Chunk(filename, datasets[0], (offset,), combined);
-      }
-      private proc writeChunk(filename, datasets: (nothing, string), offset : int, combined) {
-        writeHDF5Chunk(filename, datasets[1], (0, offset), combined);
-      }
-
-      proc mainLoop(const ref counts : [] int,
-                    filename: string, datasets: (?, ?), const ref args... ) {
-        // Prepare the output file
-        createDatasets(counts, filename, datasets, (...args));
-        // Split all states into smaller chunks
-        const ref states = args[0];
-        const indexEdges = computeRanges(states, counts);
-        const numberRanges = indexEdges.domain.dim(1).size - 1;
-        const offsets = computeOffsets(indexEdges);
-        // Iterate over chunks
-        for k in 0 .. numberRanges - 1 {
-          // Prepare for kmerge
-          var localCounts = [i in indexEdges.dim(0)] indexEdges[i, k + 1] - indexEdges[i, k];
-          const maxLocalCount = max reduce localCounts;
-          // Copy parts from different locales to here
-          const (localStates, localVectors) = createLocalCopyForMerge(
-              localCounts, maxLocalCount, k, indexEdges, (...args));
-          // Run kmerge locally
-          // TODO: not const because of unsupported const to non-const pointer casts ...
-          var combined = localMerge(localStates, localVectors, localCounts);
-          // Save to file
-          // TODO: make async
-          writeChunk(filename, datasets, offsets[k]:int, combined);
-        }
-      }
-    } // module MergeAndWrite
-    */
 
     proc gatherImpl(param tag : int, const ref arrays, const ref indices : [?D] (int, int))
         where tag == 1 {
@@ -285,9 +61,12 @@ module MatVec {
       }
     }
 
+    var _mergeAndWriteVectorsTime = new MeasurementTable("mergeAndWriteVectors");
+
     proc mergeAndWriteVectors(const ref states, const ref vectors, const ref counts : [] int,
                               filename: string, dataset: string,
                               chunkSize : int = 5) {
+      var __timer = getTimerFor(_mergeAndWriteVectorsTime);
       const totalCount = (+ reduce counts);
       const numberVectors = vectors[0].dim(0).size;
       createHDF5Dataset(filename, dataset, vectors[0].eltType, (numberVectors, totalCount));
@@ -298,7 +77,10 @@ module MatVec {
       }
     }
 
+    var _loadStatesTime = new MeasurementTable("loadStates");
+
     proc loadStates(filename : string, dataset : string) {
+      var __timer = getTimerFor(_loadStatesTime);
       const _shape = datasetShape(filename, dataset);
       assert(_shape.size == 1);
       const totalNumberStates = _shape[0];
@@ -311,7 +93,11 @@ module MatVec {
       }
       return states;
     }
+
+    var _loadVectorsTime = new MeasurementTable("loadVectors");
+
     proc loadVectors(filename : string, dataset : string, type eltType = real(64)) {
+      var __timer = getTimerFor(_loadVectorsTime);
       const _shape = datasetShape(filename, dataset);
       assert(_shape.size == 2);
       const numberVectors = _shape[0];

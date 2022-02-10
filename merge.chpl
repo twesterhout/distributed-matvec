@@ -2,6 +2,7 @@ module Merge {
   use List;
   use Search;
   use SysCTypes;
+  use profiling;
 
   record Node {
     var chunkIndex : int;
@@ -136,8 +137,11 @@ module Merge {
     // writeln("chunkBounds: ", bounds);
     return bounds;
   }
+
+  var _chunkedOffsetsTime = new MeasurementTable("Merge.chunkOffsets");
+
   private proc chunkOffsets(const ref arrays, const ref counts, chunkSize : int) {
-    writeln("[Chapel] kMerge using chunkSize=", chunkSize);
+    var __time = getTimerFor(_chunkedOffsetsTime);
     const bounds = chunkBounds(arrays, counts, chunkSize);
 
     var offsets : [0 ..# counts.size, 0 ..# bounds.size] int;
@@ -150,21 +154,19 @@ module Merge {
         offsets[i, j] = location;
       }
     }
-    // writeln("chunkOffsets:");
-    // writeln(offsets);
     return offsets;
-
-    // forall j in 0 ..# bounds.size - 1 {
-    //   const chunk : [0 ..# counts.size] (int, int) =
-    //     [i in offsets.dim(0)] (offsets[i, j], offsets[i, j + 1]);
-    //   yield chunk;
-    // }
   }
+
   private inline proc linearizeOffsets(const ref offsets) {
     return [j in offsets.dim(1)] (+ reduce offsets[.., j]);
   }
+
+  var _chunkedIterBodyTime = new MeasurementTable("Merge.chunkedIterBody");
+  var _kMergeIndicesChunked = new MeasurementTable("Merge.kMergeIndicesChunked");
+
   private proc chunkedIterBody(chunkId : int, const ref arrays, const ref counts,
                                const ref offsets, numberArrays, type eltType) {
+    var __time = getTimerFor(_chunkedIterBodyTime);
     // Gather chunk
     const localCounts = [i in 0 ..# numberArrays] offsets[i, chunkId + 1] - offsets[i, chunkId];
     const totalLocalCount = + reduce localCounts;
@@ -183,7 +185,9 @@ module Merge {
     }
     return localMergeIndices;
   }
+
   iter kMergeIndicesChunked(const ref arrays, const ref counts, chunkSize : int) {
+    var __time = getTimerFor(_kMergeIndicesChunked);
     const offsets = chunkOffsets(arrays, counts, chunkSize);
     const linear = linearizeOffsets(offsets);
     const numberArrays = counts.size;
@@ -197,6 +201,7 @@ module Merge {
   iter kMergeIndicesChunked(param tag : iterKind,
                             const ref arrays, const ref counts, chunkSize : int)
       where tag == iterKind.standalone {
+    var __time = getTimerFor(_kMergeIndicesChunked);
     const offsets = chunkOffsets(arrays, counts, chunkSize);
     const linear = linearizeOffsets(offsets);
     const numberArrays = counts.size;
@@ -207,95 +212,6 @@ module Merge {
       yield (linear[chunkId], indices);
     }
   }
-
-  /*
-  proc mergeStates(const ref states, const ref counts : [] int,
-                   filename: string, dataset: string) {
-    // Prepare the output file
-    const totalCount = (+ reduce counts);
-    ls_hs_hdf5_create_dataset_u64(
-      filename.c_str(), dataset.c_str(), 1, c_ptrTo([totalCount:uint]));
-
-    // Split all states into smaller chunks
-    const indexEdges = computeRanges(states, counts);
-    const numberRanges = indexEdges.domain.dim(1).size - 1;
-    // Compute sizes of those chunks
-    var offsets : [0 .. numberRanges] uint(64);
-    offsets[0] = 0;
-    for j in 1 .. numberRanges {
-      const n = (+ reduce [i in indexEdges.dim(0)] indexEdges[i, j] - indexEdges[i, j - 1]);
-      offsets[j] = offsets[j - 1] + n:uint;
-    }
-    // Iterate over chunks
-    // TODO: parallelize
-    for k in 0 .. numberRanges - 1 {
-      // Prepare for kmerge
-      var localCounts = [i in indexEdges.dim(0)] indexEdges[i, k + 1] - indexEdges[i, k];
-      var maxLocalCount = max reduce localCounts;
-      // Copy chunks from different locales to here
-      var localStates : [0 .. states.dim(0).size - 1] [0 .. maxLocalCount - 1] uint(64);
-      for i in 0 .. states.dim(0).size - 1 {
-        localStates[i][0 .. localCounts[i] - 1] =
-          states[i][indexEdges[i, k] .. indexEdges[i, k + 1] - 1];
-      }
-      // Run kmerge locally
-      const localCount = offsets[k + 1] - offsets[k];
-      assert(localCount:int == + reduce localCounts);
-      var combinedLocalStates : [0 .. localCount - 1] uint(64) =
-        kmerge(localStates, localCounts);
-
-      // Save to file
-      // TODO: make async
-      var c_offset = offsets[k];
-      var c_shape = localCount;
-      ls_hs_hdf5_write_chunk_u64(filename.c_str(), dataset.c_str(),
-        1, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(combinedLocalStates));
-    }
-  }
-
-  proc mergeVectorsBy(const ref states, const ref counts : [] int, const ref vectors,
-                      filename: string, dataset: string) {
-    // Prepare the output file
-    const totalCount = (+ reduce counts);
-    assert(vectors[0].rank == 2);
-    const numberVectors = vectors[0].dim(0).size;
-    type eltType = vectors[0].eltType;
-    assert(eltType == real(64));
-    createHDF5Dataset(filename, dataset, eltType, (numberVectors, totalCount));
-
-    // Split all states into smaller chunks
-    const indexEdges = computeRanges(states, counts);
-    const offsets = computeOffsets(indexEdges);
-    const numberRanges = indexEdges.domain.dim(1).size - 1;
-    // Iterate over chunks
-    // TODO: parallelize
-    for k in 0 .. numberRanges - 1 {
-      // Prepare for kmerge
-      var localCounts = [i in indexEdges.dim(0)] indexEdges[i, k + 1] - indexEdges[i, k];
-      var maxLocalCount = max reduce localCounts;
-      // Copy chunks from different locales to here
-      var localStates : [0 .. states.dim(0).size - 1, 0 .. maxLocalCount - 1] uint(64);
-      for i in localStates.dim(0) {
-        localStates[i, 0 .. localCounts[i] - 1] =
-          states[i][indexEdges[i, k] .. indexEdges[i, k + 1] - 1];
-      }
-      // Run kmerge locally
-      const localCount = offsets[k + 1] - offsets[k];
-      assert(localCount:int == + reduce localCounts);
-      var combinedLocalVectors : [0 .. numberVectors - 1, 0 .. localCount:int - 1] eltType = noinit;
-      for ((chunkIndex, indexInChunk), j) in zip(kmergeIndices(localStates, localCounts), 0..) {
-        for i in 0 .. numberVectors - 1 {
-          combinedLocalVectors[i, j] =
-            vectors[chunkIndex][i, indexEdges[chunkIndex, k] + indexInChunk];
-        }
-      }
-
-      // Save to file
-      // TODO: generalize to other eltTypes
-      writeHDF5Chunk(filename, dataset, (0:uint, offsets[k]), combinedLocalVectors);
-    }
-  }
-  */
 
   proc merge_test()
   {

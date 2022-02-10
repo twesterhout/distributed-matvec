@@ -1,5 +1,6 @@
 use CPtr;
 use SysCTypes;
+use profiling;
 
 require "lattice_symmetries/lattice_symmetries.h";
 extern type ls_spin_basis;
@@ -64,17 +65,17 @@ extern proc ls_hs_hdf5_read_chunk_f64(path: c_string, dataset: c_string,
 proc initRuntime(withLogging : bool) {
   for loc in Locales do on loc {
     if (withLogging) { ls_enable_logging(); }
-    writeln("[Chapel] Calling ls_hs_init on Locales[", loc.id, "] ...");
+    // writeln("[Chapel] Calling ls_hs_init on Locales[", loc.id, "] ...");
     ls_hs_init();
-    writeln("[Chapel] ls_hs_init on Locales[", loc.id, "] is done");
+    // writeln("[Chapel] ls_hs_init on Locales[", loc.id, "] is done");
   }
 }
 
 proc deinitRuntime() {
   for loc in Locales do on loc {
-    writeln("[Chapel] Calling ls_hs_exit on Locales[", loc.id, "] ...");
+    // writeln("[Chapel] Calling ls_hs_exit on Locales[", loc.id, "] ...");
     ls_hs_exit();
-    writeln("[Chapel] ls_hs_exit on Locales[", loc.id, "] is done");
+    // writeln("[Chapel] ls_hs_exit on Locales[", loc.id, "] is done");
   }
 }
 
@@ -102,6 +103,8 @@ proc _makeDomain(shape : 2 * int) : domain(2) {
   return {0 .. shape[0]:int - 1, 0 .. shape[1]:int - 1};
 }
 
+var _readHDF5ChunkTime = new MeasurementTable("readHDF5Chunk");
+
 /* Read part of a dataset from a HDF5 file.
  *
  * :arg filename: Path to HDF5 file.
@@ -125,6 +128,7 @@ proc readHDF5Chunk(filename : string, dataset : string, type eltType, offset, sh
  */
 proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltType)
     where isTuple(offset) && offset.size == array.rank {
+  var __timer = getTimerFor(_readHDF5ChunkTime);
   const rank = offset.size;
   var c_offset : [0 .. rank - 1] uint(64) = noinit;
   var c_shape : [0 .. rank - 1] uint(64) = noinit;
@@ -146,11 +150,14 @@ proc readHDF5Chunk(filename : string, dataset : string, offset, array : [] ?eltT
   // return array;
 }
 
+var _createHDF5DatasetTime = new MeasurementTable("createHDF5Dataset");
+
 /* Create an HDF5 dataset of given shape and data type.
  *
  */
 proc createHDF5Dataset(filename : string, dataset : string, type eltType, shape) {
   assert(filename.locale == here && dataset.locale == here);
+  var __timer = getTimerFor(_createHDF5DatasetTime);
   var c_shape : [0 .. shape.size - 1] uint(64) = noinit;
   for i in 0 .. shape.size - 1 { c_shape[i] = shape[i]:uint; }
   if (eltType == uint(64)) {
@@ -166,11 +173,14 @@ proc createHDF5Dataset(filename : string, dataset : string, type eltType, shape)
   }
 }
 
+var _writeHDF5ChunkTime = new MeasurementTable("writeHDF5Chunk");
+
 /* Write array to a HDF5 dataset.
  */
 proc writeHDF5Chunk(filename : string, dataset : string, offset, array : [?D] ?eltType)
     where isTuple(offset) && offset.size == D.rank {
   assert(D.rank == offset.size);
+  var __timer = getTimerFor(_writeHDF5ChunkTime);
   var c_offset : [0 .. D.rank - 1] uint(64) = noinit;
   var c_shape  : [0 .. D.rank - 1] uint(64) = noinit;
   for i in c_offset.domain { c_offset[i] = offset[i]:uint; }

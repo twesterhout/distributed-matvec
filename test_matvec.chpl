@@ -1,5 +1,6 @@
 use matvec;
 use basis;
+use states;
 use wrapper;
 use Distribute;
 use Merge;
@@ -11,9 +12,40 @@ config const kInputBasisPath = "data/heisenberg_chain_10.yaml";
 config const kInputDataPath = "data/matvec/heisenberg_chain_10.h5";
 config const kOutputDataPath = "output.h5";
 config const kDebugLatticeSymmetries = false;
-config const kDistributionChunkSize = 10000;
 config const kPrintOutput = false;
 config const kBits = 16;
+
+proc profilingOverview() {
+  writeln("╔═════════════════════════╗");
+  writeln("║Constructing basis states║");
+  writeln("╚═════════════════════════╝");
+  _makeStatesTime.print();
+  _makeStatesLoopTime.print();
+  _makeStatesAllocatingTime.print();
+  _makeStatesListToArrayTime.print();
+  _makeStatesRemoteCopiesTime.print();
+  _splitIntoRangesTime.print();
+  writeln("╔═════════════════════╗");
+  writeln("║Matrix-vector product║");
+  writeln("╚═════════════════════╝");
+  _matvecTime.print();
+  _processBatchTime.print();
+  writeln("╔══════════════╗");
+  writeln("║Input / Output║");
+  writeln("╚══════════════╝");
+  _distributionMaskTime.print();
+  _kMergeIndicesChunked.print();
+  _chunkedIterBodyTime.print();
+  _chunkedOffsetsTime.print();
+  _distributeArrayTime.print();
+  _distributeArrayDistributeTime.print();
+  _distributeArrayRemoteCopiesTime.print();
+  _mergeAndWriteVectorsTime.print();
+  _writeHDF5ChunkTime.print();
+  _createHDF5DatasetTime.print();
+  _loadVectorsTime.print();
+  _readHDF5ChunkTime.print();
+}
 
 proc main() {
   initRuntime(false);
@@ -23,57 +55,18 @@ proc main() {
   var matrix = new DistributedOperator(kInputBasisPath);
   writeln("[Chapel] Hilbert space dimension is ", states.totalNumberStates());
 
-  timer.start();
-  var mask = distributionMask(states, chunkSize = kDistributionChunkSize);
-  timer.stop();
-  writeln("[Chapel] distributionMask took ", timer.elapsed());
-
-  timer.clear();
-  timer.start();
+  var mask = distributionMask(states);
   var X = distributeVectors(loadVectors(kInputDataPath, "/x")[0 ..# 1, ..], mask);
-  timer.stop();
-  writeln("[Chapel] loadVectors+distributeVectors took ", timer.elapsed());
 
-  timer.clear();
-  timer.start();
   var Y : [OnePerLocale] [X[0].domain] real(64);
-  writeln("[Chapel] initializing Y took ", timer.elapsed());
-  timer.stop();
+  matvecSimple(matrix, states, X, Y);
 
-  matvecSerial(matrix, states, X, Y);
+  var YExpected = distributeVectors(loadVectors(kInputDataPath, "/y")[0 ..# 1, ..], mask);
+
   if (kPrintOutput) {
     writeln(Y);
-  }
-
-  // coforall loc in Locales do on loc {
-  //   writeln(matrix.requiredBufferSize());
-  // }
-
-  // if (false) {
-  //   const batchSize = 1;
-  //   const bufferSize = 13;
-  //   coforall loc in Locales do on loc {
-  //     var spins : [0 ..# 1] uint(64) = 0;
-  //     var offsetsBatch : [0 ..# batchSize + 1] uint(64);
-  //     var spinsBatch : [0 ..# bufferSize] uint(64);
-  //     var coeffsBatch : [0 ..# bufferSize] complex(128);
-  //     matrix.batchedApply(
-  //       states.representatives[loc.id][0 ..# 1],
-  //       offsetsBatch,
-  //       spinsBatch,
-  //       coeffsBatch);
-  //   }
-  // }
-
-  timer.clear();
-  timer.start();
-  var YExpected = distributeVectors(loadVectors(kInputDataPath, "/y")[0 ..# 1, ..], mask);
-  timer.stop();
-  writeln("[Chapel] loadVectors+distributeVectors took ", timer.elapsed());
-  if kPrintOutput {
     writeln(YExpected);
   }
-
   var status : int = 0;
   for loc in Locales {
     const error = max reduce abs(Y[loc.id] - YExpected[loc.id]);
@@ -93,6 +86,8 @@ proc main() {
     //   status = 1;
     // }
   }
+
+  profilingOverview();
   return status;
 }
 

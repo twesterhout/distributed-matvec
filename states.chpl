@@ -7,6 +7,7 @@ use CyclicDist;
 use Time;
 
 use wrapper;
+use profiling;
 
 /* Hash function which we use to map spin configurations to locale indices.
 
@@ -134,6 +135,8 @@ inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(6
   return x;
 }
 
+var _splitIntoRangesTime = new MeasurementTable("splitIntoRanges");
+
 /* Splits `[current, bound]` into chunks
    `{[current, upper_1], [lower_2, upper_2], ..., [lower_N, bound]}`
    such that `upper_i - lower_i` is approximately `chunkSize`. Note that care
@@ -142,9 +145,7 @@ inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(6
  */
 proc splitIntoRanges(in current: uint(64), bound: uint(64), chunkSize: uint(64),
                      isHammingWeightFixed: bool) {
-  var timer = new Timer();
-  timer.start();
-
+  var __timer = getTimerFor(_splitIntoRangesTime);
   var ranges: list((uint(64), uint(64)));
   const hammingWeight = popcount(current);
   while (true) {
@@ -164,13 +165,7 @@ proc splitIntoRanges(in current: uint(64), bound: uint(64), chunkSize: uint(64),
       current = if isHammingWeightFixed then nextStateFixedHamming(next)
                                         else nextStateGeneral(next);
   }
-  timer.stop();
-  writeln("[Chapel] Constructing ranges took ", timer.elapsed());
-  timer.clear();
-  timer.start();
   var distRanges = newCyclicArr({0.. ranges.size - 1}, (uint(64), uint(64)));
   distRanges = ranges;
-  timer.stop();
-  writeln("[Chapel] Copying to distRanges took ", timer.elapsed());
   return distRanges;
 }

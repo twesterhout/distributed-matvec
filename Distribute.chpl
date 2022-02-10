@@ -4,6 +4,12 @@ module Distribute {
   // use CyclicDist;
   use states only hash64_01;
   use basis only BasisStates;
+  use profiling;
+
+  config const kDistributionMaskChunkSize = 10240;
+
+  var _distributionMaskTime = new MeasurementTable("distributionMask");
+  var _distributionMaskInnerTime = new MeasurementTable("distributionMask::inner copy");
 
   proc distributionMask(const ref states : [?D] uint(64)) {
     const n = numLocales;
@@ -16,12 +22,16 @@ module Distribute {
     return mask;
   }
 
-  proc distributionMask(const ref states : BasisStates, chunkSize : int) {
+  proc distributionMask(const ref states : BasisStates,
+                        chunkSize : int = kDistributionMaskChunkSize) {
+    var __timer = getTimerFor(_distributionMaskTime);
     const totalCount = states.totalNumberStates();
     const D : domain(1) dmapped Block(LocaleSpace) = {0 ..# totalCount};
     var mask : [D] int;
     forall (offset, indices) in kMergeIndicesChunked(states._representatives,
-                                                     states._counts, chunkSize) {
+                                                     states._counts, chunkSize)
+        with (ref _distributionMaskInnerTime) {
+      var __timer1 = getTimerFor(_distributionMaskInnerTime);
       mask[offset ..# indices.size] = [i in indices.domain] indices[i][0];
     }
     // writeln(D);
@@ -59,34 +69,46 @@ module Distribute {
     return {0 ..# D.dim(0).size, 0 ..# n};
   }
 
+  var _distributeArrayTime = new MeasurementTable("distributeArray");
+  var _distributeArrayDistributeTime = new MeasurementTable("distributeArray::distribute");
+  var _distributeArrayRemoteCopiesTime = new MeasurementTable("distributeArray::remote copy");
+
   proc distributeArray(const ref array : [?OuterDomain] ?eltType,
                        const ref mask  : [?OuterDomain2] int)
       where isSubtype(OuterDomain.dist.type, Block) {
     assert(array.size > 0);
+    var __timer = getTimerFor(_distributeArrayTime);
     param rank = array.domain.rank;
     const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
 
+    var __timer1 = getTimerFor(_distributeArrayDistributeTime);
     const TempInnerDomain = innerDomain(array, maxInnerCount(mask));
     var globalTemp : [OnePerLocale] [LocaleSpace] [TempInnerDomain] eltType;
     var globalTempCounts : [OnePerLocale] [LocaleSpace] int;
     coforall loc in Locales do on loc {
       ref temp = globalTemp[loc.id];
       ref offsets = globalTempCounts[loc.id];
-      for _i in mask.localSubdomain() do {
-        const targetLocale = mask[_i];
-        if rank == 1 {
-          temp[targetLocale][offsets[targetLocale]] = array[_i];
-        }
-        else if rank == 2 {
-          for k in TempInnerDomain.dim(0) {
-            temp[targetLocale][k, offsets[targetLocale]] = array[k, _i];
+      forall targetLocale in LocaleSpace {
+        for i in mask.localSubdomain() do {
+          // const targetLocale = mask[i];
+          if mask[i] == targetLocale {
+            if rank == 1 {
+              temp[targetLocale][offsets[targetLocale]] = array[i];
+            }
+            else if rank == 2 {
+              foreach k in TempInnerDomain.dim(0) {
+                temp[targetLocale][k, offsets[targetLocale]] = array[k, i];
+              }
+            }
+            else { compilerError("Oops"); }
+            offsets[targetLocale] += 1;
           }
         }
-        else { compilerError("Oops"); }
-        offsets[targetLocale] += 1;
       }
     }
+    __timer1.stop();
 
+    var __timer2 = getTimerFor(_distributeArrayRemoteCopiesTime);
     const globalFinalCounts : [OnePerLocale] int =
       [j in LocaleSpace] (+ reduce [i in OnePerLocale] globalTempCounts[i][j]);
     const maxCountPerLocale = max reduce globalFinalCounts;
@@ -105,6 +127,7 @@ module Distribute {
         offset += n;
       }
     }
+    __timer2.stop();
 
     return (globalFinal, globalFinalCounts);
   }
