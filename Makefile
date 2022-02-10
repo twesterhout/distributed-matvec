@@ -2,29 +2,29 @@
 .POSIX:
 
 OPTIMIZATION ?= --debug
-CFLAGS = -Ithird_party/include $(OPTIMIZATION)
+COMPILER ?= llvm
+CFLAGS = -Ithird_party/include $(OPTIMIZATION) --target-compiler=$(COMPILER)
 HDF5_LIBS ?= `pkg-config --libs hdf5` -lhdf5_hl
 LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries $(HDF5_LIBS) -lutil -lgomp -lpthread
 
-all: basis
+all: test_matvec
 
-# plugin.o: plugin.c plugin.h
-# libplugin.a: plugin.o
-# 	$(AR) rcs $@ $^
 
-test: test.chpl
-	chpl $(OPTIMIZATION) -o $@ $^
-
-# basis: basis.chpl states.chpl
-# 	chpl $(CFLAGS) --main-module basis -o $@ $^ $(LDFLAGS) 
-
-# basis: lib/libbasis.a
-# lib/libbasis.a: basis.chpl states.chpl
-# 	chpl $(CFLAGS) --library --static --library-makefile -o basis $^ $(LDFLAGS) 
 DATA_FILES = data/heisenberg_chain_10.h5 \
 	     data/heisenberg_kagome_12.h5 \
 	     data/heisenberg_kagome_16.h5 \
 	     data/heisenberg_square_4x4.h5
+
+CHPL_SOURCES = matvec.chpl \
+	       basis.chpl \
+	       states.chpl \
+	       merge.chpl \
+	       io.chpl \
+	       wrapper.chpl \
+	       profiling.chpl \
+	       Distribute.chpl
+
+C_SOURCES = util.c
 
 .PHONY: check_io
 check_io: test_basis_construction test_vector_loading $(DATA_FILES)
@@ -44,7 +44,7 @@ check_io: test_basis_construction test_vector_loading $(DATA_FILES)
 	  done; \
 	done
 
-test_matvec: test_matvec.chpl matvec.chpl Distribute.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl
+test_matvec: test_matvec.chpl matvec.chpl Distribute.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl profiling.chpl util.c
 	chpl \
 		$(CFLAGS) \
 		-o $@ $^ \
