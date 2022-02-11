@@ -13,6 +13,7 @@ config const kInputDataPath = "data/matvec/heisenberg_chain_10.h5";
 config const kOutputDataPath = "output.h5";
 config const kDebugLatticeSymmetries = false;
 config const kPrintOutput = false;
+config const kStopEarly = false;
 config const kBits = 16;
 
 proc profilingOverview() {
@@ -39,9 +40,11 @@ proc profilingOverview() {
   writeln("║Input / Output║");
   writeln("╚══════════════╝");
   _distributionMaskTime.print();
+  _distributionMaskInnerTime.print();
   _kMergeIndicesChunked.print();
   _chunkedIterBodyTime.print();
-  _chunkedOffsetsTime.print();
+  _chunkOffsetsTime.print();
+  _chunkBoundsTime.print();
   _distributeArrayTime.print();
   _distributeArrayDistributeTime.print();
   _distributeArrayRemoteCopiesTime.print();
@@ -62,13 +65,18 @@ proc main() {
   writeln("[Chapel] Distribution of states: ", states._counts:real / states.totalNumberStates());
 
   var mask = distributionMask(states);
-  var X = distributeVectors(loadVectors(kInputDataPath, "/x")[0 ..# 1, ..], mask);
+  var X = distributeVectors(loadVectors(kInputDataPath, "/x"), mask);
+
+  if (kStopEarly) {
+    profilingOverview();
+    return 0;
+  }
 
   var Y : [OnePerLocale] [X[0].domain] real(64);
   matvecSimple(matrix, states, X, Y);
   writeln("[Chapel] Done with matvecSimple!");
 
-  var YExpected = distributeVectors(loadVectors(kInputDataPath, "/y")[0 ..# 1, ..], mask);
+  var YExpected = distributeVectors(loadVectors(kInputDataPath, "/y"), mask);
 
   if (kPrintOutput) {
     writeln(Y);

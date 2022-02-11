@@ -3,6 +3,8 @@ module Merge {
   use Search;
   use SysCTypes;
   use profiling;
+  use DynamicIters;
+  use CommDiagnostics;
 
   record Node {
     var chunkIndex : int;
@@ -29,10 +31,10 @@ module Merge {
     }
   }
 
-  private inline proc indexAccess(const ref chunks, i : int, j) {
+  private inline proc indexAccess(const ref chunks, i : int, j) const ref {
     return chunks[i][j];
   }
-  private inline proc indexAccess(const ref chunks : [?D] ?eltType, i : int, j)
+  private inline proc indexAccess(const ref chunks : [?D] ?eltType, i : int, j) const ref
       where (D.rank == 2) {
     return chunks[i, j];
   }
@@ -117,9 +119,12 @@ module Merge {
     }
   }
 
+  var _chunkBoundsTime = new MeasurementTable("Merge.chunkBounds");
+
   private proc chunkBounds(const ref arrays, const ref counts, chunkSize : int) {
     assert(chunkSize >= 1);
     assert(&& reduce [i in counts.domain] counts[i] > 0);
+    var __time = getTimerFor(_chunkBoundsTime);
     type eltType = indexAccess(arrays, 0, 0).type;
     const lower = indexAccess(arrays, 0, 0);
     const upper = indexAccess(arrays, 0, counts[0] - 1);
@@ -135,25 +140,37 @@ module Merge {
     }
     if (bounds.last() != upper || bounds.size < 2) { bounds.append(upper); }
     // writeln("chunkBounds: ", bounds);
-    return bounds;
+    var boundsArr : [0 ..# bounds.size] eltType = bounds;
+    return boundsArr;
   }
 
-  var _chunkedOffsetsTime = new MeasurementTable("Merge.chunkOffsets");
+  var _chunkOffsetsTime = new MeasurementTable("Merge.chunkOffsets");
 
   private proc chunkOffsets(const ref arrays, const ref counts, chunkSize : int) {
-    var __time = getTimerFor(_chunkedOffsetsTime);
+    var __time = getTimerFor(_chunkOffsetsTime);
     const bounds = chunkBounds(arrays, counts, chunkSize);
 
     var offsets : [0 ..# counts.size, 0 ..# bounds.size] int;
+    // startVerboseComm();
     forall i in counts.domain {
-      offsets[i, 0] = 0;
-      offsets[i, bounds.size - 1] = counts[i];
+      const localBounds = bounds;
+      const localCount = counts[i];
+      var localOffsets : [0 ..# localBounds.size] int;
+      localOffsets[0] = 0;
+      localOffsets[localBounds.size - 1] = localCount;
       for j in 1 .. bounds.size - 2 {
-        const (_found, location) = binarySearch(
-          indexAccess(arrays, i, 0 ..# counts[i]), bounds[j]);
-        offsets[i, j] = location;
+        if arrays.domain.rank == 1 {
+          localOffsets[j] = binarySearch(
+            arrays[i][localOffsets[j - 1] .. counts[i] - 1], localBounds[j])[1];
+        }
+        else {
+          localOffsets[j] = binarySearch(
+            arrays[i, localOffsets[j - 1] .. counts[i] - 1], localBounds[j])[1];
+        }
       }
+      offsets[i, ..] = localOffsets;
     }
+    // stopVerboseComm();
     return offsets;
   }
 
@@ -168,20 +185,28 @@ module Merge {
                                const ref offsets, numberArrays, type eltType) {
     var __time = getTimerFor(_chunkedIterBodyTime);
     // Gather chunk
-    const localCounts = [i in 0 ..# numberArrays] offsets[i, chunkId + 1] - offsets[i, chunkId];
+    const localCounts : [0 ..# numberArrays] int =
+      [i in 0 ..# numberArrays] offsets[i, chunkId + 1] - offsets[i, chunkId];
     const totalLocalCount = + reduce localCounts;
     const maxLocalCount = max reduce localCounts;
     var localArrays : [0 ..# numberArrays, 0 ..# maxLocalCount] eltType;
-    for i in 0 ..# numberArrays {
-      localArrays[i, 0 ..# localCounts[i]] =
-        indexAccess(arrays, i, offsets[i, chunkId] .. offsets[i, chunkId + 1] - 1);
+    foreach i in 0 ..# numberArrays {
+      if arrays.domain.rank == 1 {
+        localArrays[i, 0 ..# localCounts[i]] =
+          arrays[i][offsets[i, chunkId] .. offsets[i, chunkId + 1] - 1];
+      }
+      else {
+        localArrays[i, 0 ..# localCounts[i]] =
+          arrays[i, offsets[i, chunkId] .. offsets[i, chunkId + 1] - 1];
+      }
     }
     // writeln("chunkId=", chunkId, " localArrays:");
     // writeln(localArrays);
     var localMergeIndices : [0 ..# totalLocalCount] (int, int);
     for ((arrayIndex, indexInArray), j) in zip(kMergeIndices(localArrays, localCounts),
                                                localMergeIndices) {
-      j = (arrayIndex, offsets[arrayIndex, chunkId] + indexInArray);
+      const o = offsets[arrayIndex, chunkId];
+      j = (arrayIndex, o + indexInArray);
     }
     return localMergeIndices;
   }
@@ -203,14 +228,28 @@ module Merge {
       where tag == iterKind.standalone {
     var __time = getTimerFor(_kMergeIndicesChunked);
     const offsets = chunkOffsets(arrays, counts, chunkSize);
-    const linear = linearizeOffsets(offsets);
-    const numberArrays = counts.size;
-    const numberChunks = offsets.dim(1).size - 1;
+    // const numberArrays = counts.size;
+    // const numberChunks = offsets.dim(1).size - 1;
     type eltType = indexAccess(arrays, 0, 0).type;
-    forall chunkId in 0 ..# numberChunks {
-      const indices = chunkedIterBody(chunkId, arrays, counts, offsets, numberArrays, eltType);
-      yield (linear[chunkId], indices);
+    // writeln("[Chapel] using parallel version of kMergeIndicesChunked; ",
+    //         numberChunks, " to process...");
+    coforall loc in Locales do on loc {
+      const localOffsets = offsets;
+      const linear = linearizeOffsets(localOffsets);
+      const numberArrays = counts.size;
+      const numberChunks = localOffsets.dim(1).size - 1;
+      const chunkIds = 0 ..# numberChunks by numLocales align loc.id;
+      forall chunkId in chunkIds {
+        const indices = chunkedIterBody(chunkId, arrays, counts,
+                                        localOffsets, numberArrays, eltType);
+        yield (linear[chunkId], indices);
+      }
     }
+    // forall chunkId in 0 ..# numberChunks {
+    //   const indices = chunkedIterBody(chunkId, arrays, counts, offsets, numberArrays, eltType);
+    //   yield (linear[chunkId], indices);
+    // }
+    writeln("[Chapel] Done with kMergeIndicesChunked!");
   }
 
   proc merge_test()

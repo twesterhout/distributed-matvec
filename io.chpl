@@ -105,11 +105,15 @@ module MatVec {
     
       const boundingBox = {0 ..# numberVectors, 0 ..# totalNumberStates};
       const targetLocales = reshape(Locales, {0 ..# 1, 0 ..# numLocales});
-      const D : domain(2) dmapped Block(boundingBox, targetLocales) = boundingBox;
+      const D : domain(2) dmapped Block(boundingBox=boundingBox, targetLocales=targetLocales) =
+        boundingBox;
       var vectors : [D] eltType;
       coforall loc in Locales do on loc {
         const indices = vectors.localSubdomain();
         readHDF5Chunk(filename, dataset, indices.low, vectors[indices]);
+      }
+      for loc in Locales {
+        writeln("vectors[", loc.id, "]: ", vectors.localSubdomain(loc));
       }
       return vectors;
     }

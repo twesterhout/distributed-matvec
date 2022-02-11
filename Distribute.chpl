@@ -1,5 +1,6 @@
 module Distribute {
   use BlockDist;
+  use CommDiagnostics;
   // use BlockCycDist;
   // use CyclicDist;
   use states only hash64_01;
@@ -15,8 +16,8 @@ module Distribute {
     const n = numLocales;
     var mask : [D] int;
     forall (x, i) in zip(states, mask) {
-      assert(x.locale == here);
-      assert(i.locale == here);
+      assert(x.locale == here, "x is on the wrong locale");
+      assert(i.locale == here, "i is on the wrong locale");
       i = (hash64_01(x) % n:uint):int;
     }
     return mask;
@@ -26,13 +27,18 @@ module Distribute {
                         chunkSize : int = kDistributionMaskChunkSize) {
     var __timer = getTimerFor(_distributionMaskTime);
     const totalCount = states.totalNumberStates();
-    const D : domain(1) dmapped Block(LocaleSpace) = {0 ..# totalCount};
+    const boundingBox = {0 ..# totalCount};
+    const D : domain(1) dmapped Block(boundingBox=boundingBox) = boundingBox;
     var mask : [D] int;
     forall (offset, indices) in kMergeIndicesChunked(states._representatives,
                                                      states._counts, chunkSize)
         with (ref _distributionMaskInnerTime) {
       var __timer1 = getTimerFor(_distributionMaskInnerTime);
-      mask[offset ..# indices.size] = [i in indices.domain] indices[i][0];
+      // if indices.locale != here { error("indices are on the wrong locale"); }
+      // if offset.locale == here { error("offset is on the wrong locale"); }
+
+      const localMask : [0 ..# indices.size] int = [i in indices.domain] indices[i][0];
+      mask[offset ..# indices.size] = localMask;
     }
     // writeln(D);
     // for i in LocaleSpace {
@@ -85,27 +91,29 @@ module Distribute {
     const TempInnerDomain = innerDomain(array, maxInnerCount(mask));
     var globalTemp : [OnePerLocale] [LocaleSpace] [TempInnerDomain] eltType;
     var globalTempCounts : [OnePerLocale] [LocaleSpace] int;
+    startVerboseComm();
     coforall loc in Locales do on loc {
       ref temp = globalTemp[loc.id];
       ref offsets = globalTempCounts[loc.id];
-      forall targetLocale in LocaleSpace {
+      // forall targetLocale in LocaleSpace {
         for i in mask.localSubdomain() do {
-          // const targetLocale = mask[i];
-          if mask[i] == targetLocale {
+          const targetLocale = mask[i];
+          // if mask[i] == targetLocale {
             if rank == 1 {
-              temp[targetLocale][offsets[targetLocale]] = array[i];
+              temp[targetLocale][offsets[targetLocale]] = array.localAccess[i];
             }
             else if rank == 2 {
               foreach k in TempInnerDomain.dim(0) {
-                temp[targetLocale][k, offsets[targetLocale]] = array[k, i];
+                temp[targetLocale][k, offsets[targetLocale]] = array.localAccess[k, i];
               }
             }
             else { compilerError("Oops"); }
             offsets[targetLocale] += 1;
-          }
+          // }
         }
-      }
+      // }
     }
+    stopVerboseComm();
     __timer1.stop();
 
     var __timer2 = getTimerFor(_distributeArrayRemoteCopiesTime);
