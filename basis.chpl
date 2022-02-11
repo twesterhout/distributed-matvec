@@ -129,6 +129,25 @@ class BasisStates {
     // return r;
   }
 
+  proc getIndexFn() {
+    record Getter {
+      const shift : int;
+      const rangesPtr: c_ptr(int);
+      const dataPtr: c_ptr(uint(64));
+
+      inline proc this(x : uint(64)) : int {
+        const i = (x >> shift):int;
+        const b = rangesPtr[i];
+        const e = rangesPtr[i + 1];
+        const size = (e - b):uint(64);
+        const j = ls_binary_search(dataPtr + b, size, x);
+        assert(j < size);
+        return b + j:int;
+      }
+    }
+    return new Getter(_shift, c_ptrTo(_ranges[here.id]), c_ptrTo(_representatives[here.id]));
+  }
+
   proc getIndex(x : uint(64)) : int {
     // var __time = getTimerFor(_getIndexTime);
     const i = bucketIndex(x);

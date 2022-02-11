@@ -140,11 +140,14 @@ record BatchProcessor {
                             const ref X) {
     var __timer = getTimerFor(_processLocalTargetsTime);
     const ref localX = X[here.id];
+    const getterFn = basisStates.getIndexFn();
+    // startVerboseComm();
     foreach ((k, sj, cj), r) in zip(localTargets, localResults) {
-      const j = basisStates.getIndex(sj);
+      const j = getterFn(sj); // basisStates.getIndex(sj);
       const xj = localX[0, j];
       r = (k, cj * xj);
     }
+    // stopVerboseComm();
   }
 
   proc _processResults(ref info : TaskState) {
