@@ -69,6 +69,8 @@ inline proc makeShift(numberSpins : int, numberBits : int) : int {
   return if numberBits >= numberSpins then 0 else (numberSpins - numberBits);
 }
 
+var _getIndexTime = new MeasurementTable("BasisStates::getIndex");
+
 class BasisStates {
   var _size : int;
   var _representatives : [OnePerLocale] [0 ..# _size] uint(64);
@@ -127,25 +129,17 @@ class BasisStates {
     // return r;
   }
 
-  proc getIndex(x : uint(64), loc : locale = here) : int {
+  proc getIndex(x : uint(64)) : int {
+    // var __time = getTimerFor(_getIndexTime);
     const i = bucketIndex(x);
-    const b = _ranges[loc.id][i];
-    const e = _ranges[loc.id][i + 1];
+    const b = _ranges[here.id][i];
+    const e = _ranges[here.id][i + 1];
     // The following causes a memory allocation... :(
     // ref r = getRepresentatives(loc)[_ranges[loc.id][i] .. _ranges[loc.id][i + 1] - 1];
-    const dataPtr = c_ptrTo(_representatives[loc.id][b]);
+    const dataPtr = c_ptrTo(_representatives[here.id][b]);
     const size = (e - b):uint(64);
-    var j : uint(64);
-    if loc != here {
-      on loc { j = ls_binary_search(dataPtr, size, x); }
-    }
-    else {
-      j = ls_binary_search(dataPtr, size, x);
-    }
+    var j : uint(64) = ls_binary_search(dataPtr, size, x);
     assert(j < size);
-    // const (found, j) = binarySearch(r, x);
-    // writeln("found=", found, ", sj=", sj, ", representatives=", representatives);
-    // assert(found);
     return b + j:int;
   }
 }

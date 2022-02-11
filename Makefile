@@ -4,8 +4,8 @@
 OPTIMIZATION ?= --debug
 COMPILER ?= llvm
 CFLAGS = -Ithird_party/include $(OPTIMIZATION) --target-compiler=$(COMPILER)
-HDF5_LIBS ?= `pkg-config --libs hdf5` -lhdf5_hl
-LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries $(HDF5_LIBS) -lutil -lgomp -lpthread
+# HDF5_LIBS ?= `pkg-config --libs hdf5` -lhdf5_hl
+LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries -lutil -lgomp -lpthread
 
 all: test_matvec
 

@@ -29,7 +29,12 @@ proc profilingOverview() {
   writeln("║Matrix-vector product║");
   writeln("╚═════════════════════╝");
   _matvecTime.print();
+  _batchedApplyTime.print();
   _processBatchTime.print();
+  _constructTargetsTime.print();
+  _constructOffsetsTime.print();
+  _processLocalTargetsTime.print();
+  _processResultsTime.print();
   writeln("╔══════════════╗");
   writeln("║Input / Output║");
   writeln("╚══════════════╝");
@@ -54,6 +59,7 @@ proc main() {
   var states = makeStates(basis, kBits);
   var matrix = new DistributedOperator(kInputBasisPath);
   writeln("[Chapel] Hilbert space dimension is ", states.totalNumberStates());
+  writeln("[Chapel] Distribution of states: ", states._counts:real / states.totalNumberStates());
 
   var mask = distributionMask(states);
   var X = distributeVectors(loadVectors(kInputDataPath, "/x")[0 ..# 1, ..], mask);
