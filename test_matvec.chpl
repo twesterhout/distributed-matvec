@@ -32,7 +32,7 @@ proc profilingOverview() {
   _batchedApplyTime.print();
   _processBatchTime.print();
   _constructTargetsTime.print();
-  _constructOffsetsTime.print();
+  // _constructOffsetsTime.print();
   _processLocalTargetsTime.print();
   _processResultsTime.print();
   writeln("╔══════════════╗");
@@ -66,6 +66,7 @@ proc main() {
 
   var Y : [OnePerLocale] [X[0].domain] real(64);
   matvecSimple(matrix, states, X, Y);
+  writeln("[Chapel] Done with matvecSimple!");
 
   var YExpected = distributeVectors(loadVectors(kInputDataPath, "/y")[0 ..# 1, ..], mask);
 
