@@ -32,6 +32,7 @@ proc profilingOverview() {
   _matvecTime.print();
   _batchedApplyTime.print();
   _processBatchTime.print();
+  _processBatchInnerTime.print();
   _constructTargetsTime.print();
   // _constructOffsetsTime.print();
   _processLocalTargetsTime.print();

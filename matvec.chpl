@@ -6,6 +6,7 @@ use CPtr;
 use Time;
 use states only hash64_01;
 use profiling;
+use DynamicIters;
 use CommDiagnostics;
 use Memory.Diagnostics;
 
@@ -95,6 +96,7 @@ record TaskState {
 // var getIndexTimer = new MeasurementTable("getIndex");
 
 var _processBatchTime = new MeasurementTable("BatchProcessor::process");
+var _processBatchInnerTime = new MeasurementTable("BatchProcessor::process::inner loop");
 var _constructTargetsTime = new MeasurementTable("BatchProcessor::_constructTargetsTimer");
 var _constructOffsetsTime = new MeasurementTable("BatchProcessor::_constructOffsetsTimer");
 var _processLocalTargetsTime = new MeasurementTable("BatchProcessor::_processLocalTargetsTimer");
@@ -126,6 +128,8 @@ record BatchProcessor {
   }
 
   proc _constructOffsets() {
+    assert(offsets.locale == here);
+    assert(targetSizes.locale == here);
     var n : int = 0;
     offsets[0] = n;
     for locId in LocaleSpace {
@@ -165,14 +169,20 @@ record BatchProcessor {
     var __timer = getTimerFor(_processBatchTime);
     _constructTargets(count, info);
     _constructOffsets();
+    var __timer1 = getTimerFor(_processBatchInnerTime);
     coforall loc in Locales with (ref _processLocalTargetsTime) do on loc {
       const localTargets = targets[loc.id][0 ..# targetSizes[loc.id]];
+      const localOffsets = offsets;
+      // startVerboseComm();
       var localResults : [0 ..# localTargets.size] (int, complex(128));
       _processLocalTargets(localTargets, localResults, basisStates, X);
-      assert(offsets[loc.id + 1] - offsets[loc.id] == localResults.size);
-      assert(offsets[loc.id + 1] <= results.size);
-      results[offsets[loc.id] .. offsets[loc.id + 1] - 1] = localResults;
+      // stopVerboseComm();
+      // assert(offsets[loc.id + 1] - offsets[loc.id] == localResults.size);
+      // assert(offsets[loc.id + 1] <= results.size);
+      results[localOffsets[loc.id] .. localOffsets[loc.id + 1] - 1] = localResults;
     }
+    stopVerboseComm();
+    __timer1.stop();
     _processResults(info);
   }
 };
@@ -254,7 +264,7 @@ proc matvecSimple(matrix : DistributedOperator,
     var info = new TaskState(batchSize, bufferSize);
     var batchProcessor = new BatchProcessor(info.bufferSize);
 
-    forall chunkId in 0 ..# numberChunks with (in info, in batchProcessor) {
+    forall chunkId in dynamic(0 ..# numberChunks) with (in info, in batchProcessor) {
       const i = chunkId * batchSize;
       const n = min(batchSize, representatives.size - i);
       matrix.batchedApply(

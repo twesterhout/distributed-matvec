@@ -91,7 +91,7 @@ module Distribute {
     const TempInnerDomain = innerDomain(array, maxInnerCount(mask));
     var globalTemp : [OnePerLocale] [LocaleSpace] [TempInnerDomain] eltType;
     var globalTempCounts : [OnePerLocale] [LocaleSpace] int;
-    startVerboseComm();
+    // startVerboseComm();
     coforall loc in Locales do on loc {
       ref temp = globalTemp[loc.id];
       ref offsets = globalTempCounts[loc.id];
@@ -113,7 +113,7 @@ module Distribute {
         }
       // }
     }
-    stopVerboseComm();
+    // stopVerboseComm();
     __timer1.stop();
 
     var __timer2 = getTimerFor(_distributeArrayRemoteCopiesTime);

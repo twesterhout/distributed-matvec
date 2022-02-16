@@ -14,6 +14,8 @@ use states;
 use profiling;
 use Merge;
 
+config const kNoSymmetries = false;
+
 const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
 
 class DistributedBasis {
@@ -136,6 +138,7 @@ class BasisStates {
       const dataPtr: c_ptr(uint(64));
 
       inline proc this(x : uint(64)) : int {
+        if (kNoSymmetries) { assert(dataPtr[x:int] == x); return x:int; }
         const i = (x >> shift):int;
         const b = rangesPtr[i];
         const e = rangesPtr[i + 1];
