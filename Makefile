@@ -5,7 +5,7 @@ OPTIMIZATION ?= --debug
 COMPILER ?= llvm
 CFLAGS = -Ithird_party/include $(OPTIMIZATION) --target-compiler=$(COMPILER)
 # HDF5_LIBS ?= `pkg-config --libs hdf5` -lhdf5_hl
-LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries -lutil -lgomp -lpthread
+LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries_core -llattice_symmetries -lutil -lgomp -lpthread
 
 all: test_matvec
 
@@ -49,6 +49,20 @@ test_matvec: test_matvec.chpl matvec.chpl Distribute.chpl basis.chpl states.chpl
 		$(CFLAGS) \
 		-o $@ $^ \
 		--main-module $@ \
+		$(LDFLAGS)
+
+dummy_compile: Example01.chpl ApplyOperator.chpl # StatesEnumeration.chpl
+	chpl \
+		$(CFLAGS) \
+		-o $@ $^ \
+		--main-module Example01 \
+		$(LDFLAGS)
+
+dummy_lib: ApplyOperator.chpl
+	chpl \
+		$(CFLAGS) \
+		--library --dynamic --library-makefile \
+		-o $@ $^ \
 		$(LDFLAGS)
 
 test_basis_construction: test_basis_construction.chpl Distribute.chpl basis.chpl states.chpl io.chpl merge.chpl wrapper.chpl
