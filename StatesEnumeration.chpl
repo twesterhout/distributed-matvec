@@ -103,7 +103,10 @@ proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64), basis : c_p
   return rs;
 }
 
-proc localEnumerateRepresentatives(const ref basis : Basis, lower : uint(64), upper : uint(64)) : [] uint(64) {
+proc localEnumerateRepresentatives(const ref basis : Basis,
+                                   lower : uint(64) = basis.minStateEstimate(),
+                                   upper : uint(64) = basis.maxStateEstimate()) : [] uint(64) {
+  writeln("lower = ", lower, ", upper = ", upper);
   if (basis.isStateIndexIdentity()) {
     var rs : [0 ..# (upper - lower + 1)] uint(64) = lower .. upper;
     return rs;
@@ -117,6 +120,7 @@ proc localEnumerateRepresentatives(const ref basis : Basis, lower : uint(64), up
   const mask = (1 << numberSites) - 1; // isolate the lower numberSites bits
   const numberUp = basis.numberUp();
   const numberDown = basis.numberParticles() - numberUp;
+  writeln("numberUp = ", numberUp, ", numberDown = ", numberDown);
 
   const basisA = SpinBasis(numberSites, numberUp);
   const basisB = SpinBasis(numberSites, numberDown);
@@ -125,14 +129,17 @@ proc localEnumerateRepresentatives(const ref basis : Basis, lower : uint(64), up
   // const rsB = localEnumerateRepresentatives(basisB,
   //   (lower >> numberSites) & mask, (upper >> numberSites) & mask);
   const rsA = enumerateStatesFixedHamming(lower & mask, upper & mask, basisA.payload);
+  writeln("rsA: ", rsA);
   const rsB = enumerateStatesFixedHamming((lower >> numberSites) & mask, (upper >> numberSites) & mask,
                                           basisB.payload);
+  writeln("rsB: ", rsB);
 
   var rs : [0 ..# (rsA.size * rsB.size)] uint(64) = noinit;
   var offset : int = 0;
   for b in rsB {
     for a in rsA {
       rs[offset] = (b << numberSites) | a;
+      offset += 1;
     }
   }
   return rs;

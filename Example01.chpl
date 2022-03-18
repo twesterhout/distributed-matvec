@@ -5,8 +5,24 @@ use Time;
 proc bas() {
 }
 
+proc testConstruction() {
+  // var basis = SpinBasis(4);
+  // writeln(localEnumerateRepresentatives(basis));
+
+  // basis = SpinlessFermionicBasis(4, 1);
+  // writeln(localEnumerateRepresentatives(basis));
+
+  const basis = SpinfulFermionicBasis(numberSites=3, numberUp=2, numberDown=1);
+  writeln(localEnumerateRepresentatives(basis));
+}
+
+
+
 proc main() {
   ls_hs_init();
+
+  testConstruction();
+  return 0;
 
   var basis = SpinBasis(4); // ls_hs_create_spin_basis(10, -1);
   var tuples = reshape(

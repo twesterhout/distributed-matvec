@@ -57,6 +57,8 @@ module ApplyOperator {
   extern proc ls_hs_create_basis(particleType : ls_hs_particle_type, numberSites : c_int,
                                  numberParticles : c_int, numberUp : c_int) : c_ptr(ls_hs_basis);
   extern proc ls_hs_destroy_basis_v2(basis : c_ptr(ls_hs_basis));
+  extern proc ls_hs_min_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
+  extern proc ls_hs_max_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
 
   extern proc ls_hs_perform_gc();
 
@@ -119,9 +121,25 @@ module ApplyOperator {
     proc numberSites() : int { return payload.deref().number_sites; }
     proc numberParticles() : int { return payload.deref().number_particles; }
     proc numberUp() : int { return payload.deref().number_up; }
+
+    proc minStateEstimate() : uint(64) { return ls_hs_min_state_estimate(payload); }
+    proc maxStateEstimate() : uint(64) { return ls_hs_max_state_estimate(payload); }
   }
   proc SpinBasis(numberSites : int, hammingWeight : int = -1) {
-    return new Basis(ls_hs_create_basis(LS_HS_SPIN, numberSites:c_int, numberSites:c_int, hammingWeight:c_int));
+    return new Basis(ls_hs_create_basis(LS_HS_SPIN, numberSites:c_int, 
+                                        numberSites:c_int, hammingWeight:c_int));
+  }
+  proc SpinlessFermionicBasis(numberSites : int, numberParticles : int = -1) {
+    return new Basis(ls_hs_create_basis(LS_HS_SPINLESS_FERMION, numberSites:c_int,
+                                        numberParticles:c_int, -1));
+  }
+  proc SpinfulFermionicBasis(numberSites : int, numberParticles : int = -1) {
+    return new Basis(ls_hs_create_basis(LS_HS_SPINFUL_FERMION, numberSites:c_int,
+                                        numberParticles:c_int, -1));
+  }
+  proc SpinfulFermionicBasis(numberSites : int, numberUp : int, numberDown : int) {
+    return new Basis(ls_hs_create_basis(LS_HS_SPINFUL_FERMION, numberSites:c_int,
+                                        (numberUp + numberDown):c_int, numberUp:c_int));
   }
 
   proc localCompress(numberTerms : int, ref betas : [?D] uint(64),
