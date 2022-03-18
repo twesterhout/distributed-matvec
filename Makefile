@@ -5,7 +5,7 @@ OPTIMIZATION ?= --debug
 COMPILER ?= llvm
 CFLAGS = -Ithird_party/include $(OPTIMIZATION) --target-compiler=$(COMPILER)
 # HDF5_LIBS ?= `pkg-config --libs hdf5` -lhdf5_hl
-LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries_core -llattice_symmetries -lutil -lgomp -lpthread
+LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries -lutil -lgomp -lpthread
 
 PRIMME_CFLAGS = -I/home/tom/src/primme/include
 PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -lopenblas -lm -lgomp -lpthread
