@@ -7,6 +7,9 @@ CFLAGS = -Ithird_party/include $(OPTIMIZATION) --target-compiler=$(COMPILER)
 # HDF5_LIBS ?= `pkg-config --libs hdf5` -lhdf5_hl
 LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries_core -llattice_symmetries -lutil -lgomp -lpthread
 
+PRIMME_CFLAGS = -I/home/tom/src/primme/include
+PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -lopenblas -lm -lgomp -lpthread
+
 all: test_matvec
 
 
@@ -51,7 +54,13 @@ test_matvec: test_matvec.chpl matvec.chpl Distribute.chpl basis.chpl states.chpl
 		--main-module $@ \
 		$(LDFLAGS)
 
-dummy_compile: Example01.chpl ApplyOperator.chpl # StatesEnumeration.chpl
+primme_example: PRIMME.chpl
+	chpl \
+		$(PRIMME_CFLAGS) \
+		-o $@ $^ \
+		$(PRIMME_LDFLAGS)
+
+dummy_compile: Example01.chpl ApplyOperator.chpl StatesEnumeration.chpl
 	chpl \
 		$(CFLAGS) \
 		-o $@ $^ \
