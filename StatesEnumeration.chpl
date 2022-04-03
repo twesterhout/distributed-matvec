@@ -1,9 +1,11 @@
 module StatesEnumeration {
 
 use ApplyOperator;
-use CPtr;
-use SysCTypes;
+
 use BitOps;
+use CPtr;
+use List;
+use SysCTypes;
 
 /* Get next integer with the same hamming weight.
 
@@ -15,24 +17,24 @@ use BitOps;
    return v;
    ```
  */
-inline proc nextStateFixedHamming(v: uint(64)): uint(64) {
+private inline proc nextStateFixedHamming(v: uint(64)): uint(64) {
   const t = v | (v - 1);
   return (t + 1) | (((~t & (t + 1)) - 1) >> (ctz(v) + 1));
 }
 
-inline proc nextStateGeneral(v: uint(64)): uint(64) {
+private inline proc nextStateGeneral(v: uint(64)): uint(64) {
   return v + 1;
 }
 
-inline proc nextState(v: uint(64), isHammingWeightFixed : bool): uint(64) {
+private inline proc nextState(v: uint(64), param isHammingWeightFixed : bool): uint(64) {
   return if isHammingWeightFixed then nextStateFixedHamming(v) else nextStateGeneral(v);
 }
 
 /* Fill buffer using either nextStateFixedHamming or nextStateGeneral. Returns
    the number of elements written.
  */
-inline proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64),
-                          isHammingWeightFixed : bool) {
+private inline proc manyNextStateImpl(in v: uint(64), bound: uint(64), buffer: [] uint(64),
+                                      param isHammingWeightFixed : bool) : int {
   assert(v <= bound);
   for i in buffer.domain {
     buffer[i] = v;
@@ -42,14 +44,20 @@ inline proc manyNextState(in v: uint(64), bound: uint(64), buffer: [] uint(64),
   }
   return buffer.size;
 }
+private proc manyNextState(v: uint(64), bound: uint(64), buffer: [] uint(64),
+                           isHammingWeightFixed : bool) : int {
+  if isHammingWeightFixed
+    then return manyNextStateImpl(v, bound, buffer, true);
+    else return manyNextStateImpl(v, bound, buffer, false);
+}
 
-inline proc testBit(bits: uint(64), i: int): bool { return ((bits >> i) & 1):bool; }
-inline proc clearBit(bits: uint(64), i: int) { return bits & ~(1:uint(64) << i); }
-inline proc setBit(bits: uint(64), i: int) { return bits | (1:uint(64) << i); }
+private inline proc testBit(bits: uint(64), i: int): bool { return ((bits >> i) & 1):bool; }
+private inline proc clearBit(bits: uint(64), i: int) { return bits & ~(1:uint(64) << i); }
+private inline proc setBit(bits: uint(64), i: int) { return bits | (1:uint(64) << i); }
 
 /* Get the closest to `x` integer with Hamming weight `hammingWeight`.
  */
-inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
+private inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
   assert(hammingWeight <= 64);
   var weight = popcount(x);
   if (weight > hammingWeight) {
@@ -82,11 +90,39 @@ inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(6
   return x;
 }
 
-proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64), basis : c_ptr(ls_hs_basis)) {
+config const isRepresentativeBatchSize : int = 3;
+
+private inline iter findStatesInRange(in lower: uint(64), upper: uint(64),
+                                      isHammingWeightFixed : bool,
+                                      const ref basis : Basis) {
+  var buffer: [0 ..# isRepresentativeBatchSize] uint(64) = noinit;
+  var flags: [0 ..# isRepresentativeBatchSize] uint(8) = noinit;
+  var norms: [0 ..# isRepresentativeBatchSize] real(64) = noinit;
+  while (true) {
+    const written = manyNextState(lower, upper, buffer, isHammingWeightFixed);
+    isRepresentative(basis, buffer[0 ..# written], flags[0 ..# written], norms[0 ..# written]);
+    for i in 0 ..# written {
+      if (flags[i]:bool && norms[i] > 0) { yield buffer[i]; }
+    }
+    if (buffer[written - 1] == upper) { break; }
+
+    if isHammingWeightFixed { lower = nextState(buffer[written - 1], true); }
+    else { lower = nextState(buffer[written - 1], false); }
+  }
+}
+
+private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64), const ref basis : Basis) {
+  const isHammingWeightFixed = basis.isHammingWeightFixed();
+  var buffer : list(uint(64));
+  for x in findStatesInRange(lower, upper, isHammingWeightFixed, basis) {
+    buffer.append(x);
+  }
+  var rs : [0 ..# buffer.size] uint(64) = buffer;
+  return rs;
+}
+
+private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64), basis : c_ptr(ls_hs_basis)) {
   assert(popcount(lower) == popcount(upper));
-// typedef void (*ls_hs_internal_state_index_kernel_type)(
-//     ptrdiff_t batch_size, uint64_t const *alphas, ptrdiff_t alphas_stride,
-//     ptrdiff_t *indices, ptrdiff_t indices_stride, void const *private_data);
   var _alphas : c_array(uint(64), 2);
   _alphas[0] = lower;
   _alphas[1] = upper;
@@ -106,7 +142,9 @@ proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64), basis : c_p
 proc localEnumerateRepresentatives(const ref basis : Basis,
                                    lower : uint(64) = basis.minStateEstimate(),
                                    upper : uint(64) = basis.maxStateEstimate()) : [] uint(64) {
-  writeln("lower = ", lower, ", upper = ", upper);
+  if (basis.requiresProjection()) {
+    return enumerateStatesWithProjection(lower, upper, basis);
+  }
   if (basis.isStateIndexIdentity()) {
     var rs : [0 ..# (upper - lower + 1)] uint(64) = lower .. upper;
     return rs;
@@ -120,7 +158,7 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
   const mask = (1 << numberSites) - 1; // isolate the lower numberSites bits
   const numberUp = basis.numberUp();
   const numberDown = basis.numberParticles() - numberUp;
-  writeln("numberUp = ", numberUp, ", numberDown = ", numberDown);
+  // writeln("numberUp = ", numberUp, ", numberDown = ", numberDown);
 
   const basisA = SpinBasis(numberSites, numberUp);
   const basisB = SpinBasis(numberSites, numberDown);
@@ -129,10 +167,10 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
   // const rsB = localEnumerateRepresentatives(basisB,
   //   (lower >> numberSites) & mask, (upper >> numberSites) & mask);
   const rsA = enumerateStatesFixedHamming(lower & mask, upper & mask, basisA.payload);
-  writeln("rsA: ", rsA);
+  // writeln("rsA: ", rsA);
   const rsB = enumerateStatesFixedHamming((lower >> numberSites) & mask, (upper >> numberSites) & mask,
                                           basisB.payload);
-  writeln("rsB: ", rsB);
+  // writeln("rsB: ", rsB);
 
   var rs : [0 ..# (rsA.size * rsB.size)] uint(64) = noinit;
   var offset : int = 0;

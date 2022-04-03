@@ -12,8 +12,22 @@ proc testConstruction() {
   // basis = SpinlessFermionicBasis(4, 1);
   // writeln(localEnumerateRepresentatives(basis));
 
-  const basis = SpinfulFermionicBasis(numberSites=3, numberUp=2, numberDown=1);
+  // const basis = SpinfulFermionicBasis(numberSites=3, numberUp=2, numberDown=1);
+  // const representatives = localEnumerateRepresentatives(basis);
+
+  const basis = SpinChain10();
   writeln(localEnumerateRepresentatives(basis));
+
+  var alphas = [
+    31,
+    47,
+    55,
+    28,
+    30
+  ]:uint(64);
+  var (areRepresentatives, norms) = isRepresentative(basis, alphas);
+  writeln(areRepresentatives);
+  writeln(norms);
 }
 
 

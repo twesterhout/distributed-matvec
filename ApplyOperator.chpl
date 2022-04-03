@@ -36,6 +36,7 @@ module ApplyOperator {
     var number_up : c_int;
     var particle_type : ls_hs_particle_type;
     var state_index_is_identity : bool;
+    var requires_projection : bool;
     var kernels : c_ptr(ls_hs_basis_kernels);
     // ... other stuff ...
   }
@@ -54,6 +55,8 @@ module ApplyOperator {
   extern proc ls_hs_init();
   extern proc ls_hs_exit();
 
+  extern proc ls_hs_spin_chain_10_basis() : c_ptr(ls_hs_basis);
+
   extern proc ls_hs_create_basis(particleType : ls_hs_particle_type, numberSites : c_int,
                                  numberParticles : c_int, numberUp : c_int) : c_ptr(ls_hs_basis);
   extern proc ls_hs_destroy_basis_v2(basis : c_ptr(ls_hs_basis));
@@ -65,6 +68,10 @@ module ApplyOperator {
   extern proc ls_hs_state_index(basis : c_ptr(ls_hs_basis), batch_size : c_ptrdiff,
     spins : c_ptr(uint(64)), spins_stride : c_ptrdiff, indices : c_ptr(c_ptrdiff),
     indices_stride : c_ptrdiff);
+
+  extern proc ls_hs_is_representative(basis : c_ptr(ls_hs_basis), batch_size : c_ptrdiff,
+    alphas : c_ptr(uint(64)), alphas_stride : c_ptrdiff, are_representatives : c_ptr(uint(8)),
+    norms : c_ptr(real(64)));
 
   // extern proc ls_hs_create_basis_kernels(basis : c_ptr(ls_hs_basis)) : c_ptr(ls_hs_basis_kernels);
   // extern proc ls_hs_destroy_basis_kernels(kernels : c_ptr(ls_hs_basis_kernels));
@@ -116,7 +123,8 @@ module ApplyOperator {
     proc isSpinfulFermionicBasis() { return payload.deref().particle_type == LS_HS_SPINFUL_FERMION; }
     proc isSpinlessFermionicBasis() { return payload.deref().particle_type == LS_HS_SPINLESS_FERMION; }
     proc isStateIndexIdentity() { return payload.deref().state_index_is_identity; }
-    // proc hasFixedHammingWeight() { return ls_hs_basis_has_fixed_hamming_weight(payload); }
+    proc requiresProjection() { return payload.deref().requires_projection; }
+    proc isHammingWeightFixed() { return ls_hs_basis_has_fixed_hamming_weight(payload); }
 
     proc numberSites() : int { return payload.deref().number_sites; }
     proc numberParticles() : int { return payload.deref().number_particles; }
@@ -140,6 +148,35 @@ module ApplyOperator {
   proc SpinfulFermionicBasis(numberSites : int, numberUp : int, numberDown : int) {
     return new Basis(ls_hs_create_basis(LS_HS_SPINFUL_FERMION, numberSites:c_int,
                                         (numberUp + numberDown):c_int, numberUp:c_int));
+  }
+
+  proc SpinChain10() {
+    return new Basis(ls_hs_spin_chain_10_basis());
+  }
+
+  proc isRepresentative(const ref basis : Basis, const ref alphas : [?D] uint(64),
+                        ref are_representatives : [?D2] uint(8),
+                        ref norms : [?D3] real(64))
+      where D.rank == 1 && D2.rank == 1 && D3.rank == 1 {
+    const batchSize = alphas.size;
+    assert(are_representatives.size == batchSize);
+    assert(norms.size == batchSize);
+
+    ls_hs_is_representative(
+      basis.payload,
+      batchSize,
+      c_const_ptrTo(alphas), 1,
+      c_ptrTo(are_representatives),
+      c_ptrTo(norms)
+    );
+  }
+  proc isRepresentative(const ref basis : Basis, const ref alphas : [?D] uint(64))
+      where D.rank == 1 {
+    const batchSize = alphas.size;
+    var areRepresentatives : [0 ..# batchSize] uint(8);
+    var norms : [0 ..# batchSize] real(64);
+    isRepresentative(basis, alphas, areRepresentatives, norms);
+    return (areRepresentatives, norms);
   }
 
   proc localCompress(numberTerms : int, ref betas : [?D] uint(64),
