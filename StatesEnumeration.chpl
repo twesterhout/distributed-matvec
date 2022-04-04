@@ -183,12 +183,46 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
   return rs;
 }
 
+  // proc _generateBucketRanges() {
+  //   coforall loc in Locales do on loc {
+  //     ref localRanges = _ranges[loc.id];
+  //     ref localStates = _representatives[loc.id][0 ..# _counts[loc.id]];
+  //     const numberBuckets = 1 << _numberBits;
+  //     var offset = 0;
+  //     for i in 0 ..# numberBuckets {
+  //       localRanges[i] = offset;
+  //       // writeln("ranges[", loc.id, "][", i, "] = ", offset);
+  //       while offset != localStates.size && bucketIndex(localStates[offset]) == i {
+  //         offset += 1;
+  //       }
+  //     }
+  //     localRanges[numberBuckets] = offset;
+  //     assert(offset == localStates.size);
+  //   }
+  // }
+proc localOffsetsForStates(numberBits : int, shift : int,
+                           const ref representatives : [?D] uint(64)) : [] int(64) {
+  const numberBuckets = 1 << numberBits;
+  var ranges : [0 ..# numberBuckets + 1] int(64);
+  var offset = 0;
+  for i in 0 ..# numberBuckets {
+    ranges[i] = offset;
+    while offset != representatives.size && (representatives[offset] >> shift):int == i {
+      offset += 1;
+    }
+  }
+  ranges[numberBuckets] = offset;
+  assert(offset == representatives.size);
+  return ranges;
+}
+
 export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
                                               lower : uint(64),
-                                              upper : uint(64)) : chpl_external_array {
+                                              upper : uint(64),
+                                              dest : c_ptr(chpl_external_array)) {
   const basis = new Basis(p, owning=false);
   var rs = localEnumerateRepresentatives(basis, lower, upper);
-  return convertToExternalArray(rs);
+  dest.deref() = convertToExternalArray(rs);
 }
 
 proc initExportedKernels() {

@@ -18,6 +18,9 @@ module ApplyOperator {
            + arr._value.locale.id:string + ", call was made on locale " + here.id:string + ")");
     return c_pointer_return(arr[arr.domain.low]);
   }
+  inline proc c_const_ptrTo(const ref x) {
+    return c_pointer_return(x);
+  }
 
   require "lattice_symmetries_haskell.h";
 
@@ -38,6 +41,7 @@ module ApplyOperator {
     var state_index_is_identity : bool;
     var requires_projection : bool;
     var kernels : c_ptr(ls_hs_basis_kernels);
+    var representatives : chpl_external_array;
     // ... other stuff ...
   }
   extern record ls_hs_nonbranching_terms {
@@ -63,6 +67,8 @@ module ApplyOperator {
   extern proc ls_hs_min_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
   extern proc ls_hs_max_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
 
+  extern proc ls_hs_basis_build(basis : c_ptr(ls_hs_basis));
+
   extern proc ls_hs_perform_gc();
 
   extern proc ls_hs_state_index(basis : c_ptr(ls_hs_basis), batch_size : c_ptrdiff,
@@ -72,6 +78,11 @@ module ApplyOperator {
   extern proc ls_hs_is_representative(basis : c_ptr(ls_hs_basis), batch_size : c_ptrdiff,
     alphas : c_ptr(uint(64)), alphas_stride : c_ptrdiff, are_representatives : c_ptr(uint(8)),
     norms : c_ptr(real(64)));
+
+  extern proc ls_hs_state_info(basis : c_ptr(ls_hs_basis), batch_size : c_ptrdiff,
+                               alphas : c_ptr(uint(64)), alphas_stride : c_ptrdiff,
+                               betas : c_ptr(uint(64)), betas_stride : c_ptrdiff,
+                               characters : c_ptr(complex(128)), norms : c_ptr(real(64)));
 
   // extern proc ls_hs_create_basis_kernels(basis : c_ptr(ls_hs_basis)) : c_ptr(ls_hs_basis_kernels);
   // extern proc ls_hs_destroy_basis_kernels(kernels : c_ptr(ls_hs_basis_kernels));
@@ -119,6 +130,8 @@ module ApplyOperator {
         ls_hs_destroy_basis_v2(payload);
     }
 
+    proc build() { ls_hs_basis_build(payload); }
+
     proc isSpinBasis() { return payload.deref().particle_type == LS_HS_SPIN; }
     proc isSpinfulFermionicBasis() { return payload.deref().particle_type == LS_HS_SPINFUL_FERMION; }
     proc isSpinlessFermionicBasis() { return payload.deref().particle_type == LS_HS_SPINLESS_FERMION; }
@@ -132,6 +145,13 @@ module ApplyOperator {
 
     proc minStateEstimate() : uint(64) { return ls_hs_min_state_estimate(payload); }
     proc maxStateEstimate() : uint(64) { return ls_hs_max_state_estimate(payload); }
+
+    proc representatives() {
+      ref rs = payload.deref().representatives;
+      if rs.elts == nil then
+        halt("basis is not built");
+      return makeArrayFromExternArray(rs, uint(64));
+    }
   }
   proc SpinBasis(numberSites : int, hammingWeight : int = -1) {
     return new Basis(ls_hs_create_basis(LS_HS_SPIN, numberSites:c_int, 
@@ -179,13 +199,8 @@ module ApplyOperator {
     return (areRepresentatives, norms);
   }
 
-  proc localCompress(numberTerms : int, ref betas : [?D] uint(64),
-                     ref coeffs : [?D2] ?eltType, ref offsets : [?D3] int)
-      where D.rank == 1 && D2.rank == 1 && D3.rank == 1 {
-    assert(betas.size == coeffs.size);
-    const batchSize = offsets.size - 1;
-    assert(betas.size == numberTerms * batchSize);
-
+  proc localCompress(batchSize : int, numberTerms : int, betas : c_ptr(uint(64)),
+                     coeffs : c_ptr(?eltType), offsets : c_ptr(int)) {
     var offset : int = 0;
     var i : int = 0;
 
@@ -221,8 +236,7 @@ module ApplyOperator {
 
   class Operator {
     var payload : c_ptr(ls_hs_operator);
-    var basis : c_ptr(ls_hs_basis);
-    var kernels : c_ptr(ls_hs_basis_kernels);
+    var basis : Basis;
 
     proc init(const ref basis : Basis, expression : string, const ref indices : [?D] ?i)
       where D.rank == 2 {
@@ -230,13 +244,11 @@ module ApplyOperator {
       const c_indices = indices:c_int;
       this.payload = ls_hs_create_operator(basis.payload, expression.localize().c_str(),
         indices.dim(0).size:c_int, indices.dim(1).size:c_int, c_const_ptrTo(c_indices));
-      this.basis = this.payload.deref().basis;
-      this.kernels = this.basis.deref().kernels;
+      this.basis = new Basis(this.payload.deref().basis, owning=false);
     }
     proc init(raw : c_ptr(ls_hs_operator)) {
       this.payload = raw;
-      this.basis = this.payload.deref().basis;
-      this.kernels = this.basis.deref().kernels;
+      this.basis = new Basis(this.payload.deref().basis, owning=false);
     }
     proc deinit() { ls_hs_destroy_operator_v2(payload); }
 
@@ -252,7 +264,7 @@ module ApplyOperator {
 
     proc _localApplyDiag(const ref alphas : [?D] uint(64), ref coeffs : [?D2] complex(128))
         where D.rank == 1 && D2.rank == 1 {
-      assert(alphas.size == coeffs.size);
+      assert(alphas.size <= coeffs.size);
       const batchSize = alphas.size;
       ls_hs_operator_apply_diag_kernel(payload, batchSize, c_const_ptrTo(alphas), 1, c_ptrTo(coeffs));
     }
@@ -262,8 +274,8 @@ module ApplyOperator {
         where D.rank == 1 && D2.rank == 1 && D3.rank == 1 {
       const batchSize = alphas.size;
       const numberTerms = numberOffDiagTerms();
-      assert(betas.size == batchSize * numberTerms);
-      assert(coeffs.size == betas.size);
+      assert(betas.size >= batchSize * numberTerms);
+      assert(coeffs.size >= batchSize * numberTerms);
       ls_hs_operator_apply_off_diag_kernel(payload, batchSize,
           c_const_ptrTo(alphas), 1, c_ptrTo(betas), 1, c_ptrTo(coeffs));
     }
@@ -272,6 +284,126 @@ module ApplyOperator {
 
   operator +(const ref a : Operator, const ref b : Operator) {
     return new Operator(ls_hs_operator_plus(a.payload, b.payload));
+  }
+
+  record LocalMatVecWorkspace {
+    var batchSize : int;
+    var numberTerms : int;
+    var offDiagDomain : domain(1);
+    var spins : [offDiagDomain] uint(64);
+    var coeffs : [offDiagDomain] complex(128);
+    var offsets : [0 ..# batchSize + 1] int;
+    var other_spins : [offDiagDomain] uint(64);
+    var other_coeffs : [offDiagDomain] complex(128);
+    var norms : [offDiagDomain] real(64);
+    var indices : [offDiagDomain] int;
+
+    proc init(batchSize, numberTerms) {
+      this.batchSize = batchSize;
+      this.numberTerms = numberTerms;
+      this.offDiagDomain = {0 ..# (batchSize * numberTerms)};
+    }
+  }
+
+  proc computeOffDiag(const ref matrix : Operator,
+                      batchSize : int,
+                      numberTerms : int,
+                      in_spins : c_ptr(uint(64)),
+                      out_spins : c_ptr(uint(64)),
+                      out_coeffs : c_ptr(complex(128)),
+                      out_offsets : c_ptr(int),
+                      temp_spins : c_ptr(uint(64)),
+                      temp_coeffs : c_ptr(complex(128)),
+                      temp_norms : c_ptr(real(64))) {
+    if matrix.basis.requiresProjection() {
+      ls_hs_operator_apply_off_diag_kernel(matrix.payload, batchSize, in_spins, 1,
+        temp_spins, 1, temp_coeffs);
+      localCompress(batchSize, numberTerms, temp_spins, temp_coeffs, out_offsets);
+      const totalSize = out_offsets[batchSize];
+      ls_hs_state_info(matrix.basis.payload, totalSize, temp_spins, 1,
+        out_spins, 1, out_coeffs, temp_norms);
+      for i in 0 ..# totalSize {
+        out_coeffs[i] *= temp_coeffs[i] * temp_norms[i];
+      }
+      ls_hs_state_info(matrix.basis.payload, batchSize, in_spins, 1,
+        temp_spins, 1, temp_coeffs, temp_norms);
+      for i in 0 ..# batchSize {
+        for k in out_offsets[i] .. out_offsets[i + 1] - 1 {
+          out_coeffs[k] /= temp_norms[i];
+        }
+      }
+    }
+    else {
+      ls_hs_operator_apply_off_diag_kernel(matrix.payload, batchSize, in_spins, 1,
+        out_spins, 1, out_coeffs);
+      localCompress(batchSize, numberTerms, out_spins, out_coeffs, out_offsets);
+    }
+  }
+
+  proc localEvaluateWaveFunction(const ref matrix : Operator,
+                                 const ref xs : [] ?eltType,
+                                 batchSize : int,
+                                 in_spins : c_ptr(uint(64)),
+                                 out_coeffs : c_ptr(?eltType2),
+                                 temp_indices : c_ptr(int)) {
+    if !matrix.basis.isStateIndexIdentity() {
+      ls_hs_state_index(matrix.basis.payload, batchSize,
+        in_spins, 1, temp_indices, 1);
+      for i in 0 ..# batchSize {
+        if (temp_indices[i] >= 0) {
+          out_coeffs[i] = xs[temp_indices[i]];
+        }
+        else {
+          out_coeffs[i] = 0;
+        }
+      }
+    }
+    else {
+      for i in 0 ..# batchSize {
+        out_coeffs[i] = xs[in_spins[i]:int];
+      }
+    }
+  }
+
+  proc localMatVecPart(const ref matrix : Operator,
+                       ref workspace : LocalMatVecWorkspace,
+                       startIndex : int, batchSize : int,
+                       representatives,
+                       xs,
+                       ys : [] ?eltType) {
+    // Diagonal part
+    ls_hs_operator_apply_diag_kernel(matrix.payload, batchSize,
+      c_const_ptrTo(representatives[startIndex]), 1, c_ptrTo(workspace.coeffs));
+    for i in 0 ..# batchSize {
+      const x = xs[startIndex + i];
+      const c = workspace.coeffs[i];
+      ys[startIndex + i] = (conjg(c) * x):eltType;
+    }
+
+    // Off-diagonal part
+    const numberTerms = workspace.numberTerms;
+    computeOffDiag(matrix, batchSize, numberTerms,
+      c_const_ptrTo(representatives[startIndex]),
+      c_ptrTo(workspace.spins),
+      c_ptrTo(workspace.coeffs),
+      c_ptrTo(workspace.offsets),
+      c_ptrTo(workspace.other_spins),
+      c_ptrTo(workspace.other_coeffs),
+      c_ptrTo(workspace.norms));
+    localEvaluateWaveFunction(matrix, xs,
+      workspace.offsets[batchSize],
+      c_ptrTo(workspace.spins),
+      c_ptrTo(workspace.other_coeffs),
+      c_ptrTo(workspace.indices));
+    for i in 0 ..# batchSize {
+      var acc : complex(128) = 0;
+      for k in workspace.offsets[i] .. workspace.offsets[i + 1] - 1 {
+        const x = workspace.other_coeffs[k];
+        const c = workspace.coeffs[k];
+        acc += conjg(c) * x;
+      }
+      ys[startIndex + i] += acc:eltType;
+    }
   }
 
   proc localMatVecPart(const ref matrix : Operator,
@@ -314,10 +446,14 @@ module ApplyOperator {
    
     const numChunks = (representatives.size + localMatVecChunkSize - 1)
                       / localMatVecChunkSize;
+    var workspace = new LocalMatVecWorkspace(localMatVecChunkSize,
+      max(1, matrix.numberOffDiagTerms()));
     // TODO: are we going to run into trouble that there are too many tasks?
-    coforall indices in chunks(0 ..# representatives.size, numChunks) {
-      localMatVecPart(matrix, representatives[indices],
-                      xs[indices], xs, ys[indices]);
+    coforall indices in chunks(0 ..# representatives.size, numChunks)
+        with (in workspace) {
+      assert(indices.size <= localMatVecChunkSize);
+      localMatVecPart(matrix, workspace, indices.low, indices.size,
+        representatives, xs, ys);
     }
   }
   proc localMatVec(const ref matrix : Operator,
