@@ -63,9 +63,14 @@ module ApplyOperator {
 
   extern proc ls_hs_create_basis(particleType : ls_hs_particle_type, numberSites : c_int,
                                  numberParticles : c_int, numberUp : c_int) : c_ptr(ls_hs_basis);
+  extern proc ls_hs_clone_basis(basis : c_ptr(ls_hs_basis)) : c_ptr(ls_hs_basis);
   extern proc ls_hs_destroy_basis_v2(basis : c_ptr(ls_hs_basis));
   extern proc ls_hs_min_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
   extern proc ls_hs_max_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
+
+  extern proc ls_hs_create_spin_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
+  extern proc ls_hs_create_spinful_fermion_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
+  extern proc ls_hs_create_spinless_fermion_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
 
   extern proc ls_hs_basis_build(basis : c_ptr(ls_hs_basis));
 
@@ -114,20 +119,29 @@ module ApplyOperator {
   extern proc ls_hs_internal_set_chpl_kernels(kernels : c_ptr(ls_chpl_kernels));
 
 
-  class Basis {
+  record Basis {
     var payload : c_ptr(ls_hs_basis);
-    var kernels : c_ptr(ls_hs_basis_kernels);
+    // var kernels : c_ptr(ls_hs_basis_kernels);
     var owning : bool;
 
     proc init(p : c_ptr(ls_hs_basis), owning : bool = true) {
       this.payload = p;
-      this.kernels = this.payload.deref().kernels;
+      // this.kernels = this.payload.deref().kernels;
       this.owning = owning;
+    }
+    proc init=(const ref from : Basis) {
+      assert(here == from.locale);
+      this.payload = ls_hs_clone_basis(from.payload);
+      this.owning = true;
+    }
+
+    proc _destroy() {
+      if (owning) then
+        ls_hs_destroy_basis_v2(payload);
     }
 
     proc deinit() {
-      if (owning) then
-        ls_hs_destroy_basis_v2(payload);
+      _destroy();
     }
 
     proc build() { ls_hs_basis_build(payload); }
@@ -153,9 +167,25 @@ module ApplyOperator {
       return makeArrayFromExternArray(rs, uint(64));
     }
   }
+
+  operator Basis.= (ref lhs : Basis, const ref rhs : Basis) {
+    assert(lhs.locale == rhs.locale);
+    lhs._destroy();
+    lhs.payload = ls_hs_clone_basis(rhs.payload);
+    lhs.owning = true;
+  }
+
+  proc SpinBasis(json : string) {
+    return new Basis(ls_hs_create_spin_basis_from_json(json.localize().c_str()));
+  }
   proc SpinBasis(numberSites : int, hammingWeight : int = -1) {
-    return new Basis(ls_hs_create_basis(LS_HS_SPIN, numberSites:c_int, 
-                                        numberSites:c_int, hammingWeight:c_int));
+    var json  = "{ \"number_spins\": " + numberSites:string;
+    if hammingWeight != -1 then
+      json += ", \"hamming_weight\": " + hammingWeight:string;
+    json += " }";
+    return SpinBasis(json);
+    // return new Basis(ls_hs_create_basis(LS_HS_SPIN, numberSites:c_int, 
+    //                                     numberSites:c_int, hammingWeight:c_int));
   }
   proc SpinlessFermionicBasis(numberSites : int, numberParticles : int = -1) {
     return new Basis(ls_hs_create_basis(LS_HS_SPINLESS_FERMION, numberSites:c_int,
@@ -237,6 +267,7 @@ module ApplyOperator {
   class Operator {
     var payload : c_ptr(ls_hs_operator);
     var basis : Basis;
+    var owning : bool;
 
     proc init(const ref basis : Basis, expression : string, const ref indices : [?D] ?i)
       where D.rank == 2 {
@@ -246,11 +277,14 @@ module ApplyOperator {
         indices.dim(0).size:c_int, indices.dim(1).size:c_int, c_const_ptrTo(c_indices));
       this.basis = new Basis(this.payload.deref().basis, owning=false);
     }
-    proc init(raw : c_ptr(ls_hs_operator)) {
+    proc init(raw : c_ptr(ls_hs_operator), owning : bool = true) {
       this.payload = raw;
       this.basis = new Basis(this.payload.deref().basis, owning=false);
     }
-    proc deinit() { ls_hs_destroy_operator_v2(payload); }
+    proc deinit() {
+      if owning then
+        ls_hs_destroy_operator_v2(payload);
+    }
 
     inline proc numberOffDiagTerms() : int {
       const p = payload.deref().off_diag_terms;
@@ -322,13 +356,13 @@ module ApplyOperator {
       const totalSize = out_offsets[batchSize];
       ls_hs_state_info(matrix.basis.payload, totalSize, temp_spins, 1,
         out_spins, 1, out_coeffs, temp_norms);
-      for i in 0 ..# totalSize {
+      foreach i in 0 ..# totalSize {
         out_coeffs[i] *= temp_coeffs[i] * temp_norms[i];
       }
       ls_hs_state_info(matrix.basis.payload, batchSize, in_spins, 1,
         temp_spins, 1, temp_coeffs, temp_norms);
       for i in 0 ..# batchSize {
-        for k in out_offsets[i] .. out_offsets[i + 1] - 1 {
+        foreach k in out_offsets[i] .. out_offsets[i + 1] - 1 {
           out_coeffs[k] /= temp_norms[i];
         }
       }
@@ -349,7 +383,7 @@ module ApplyOperator {
     if !matrix.basis.isStateIndexIdentity() {
       ls_hs_state_index(matrix.basis.payload, batchSize,
         in_spins, 1, temp_indices, 1);
-      for i in 0 ..# batchSize {
+      foreach i in 0 ..# batchSize {
         if (temp_indices[i] >= 0) {
           out_coeffs[i] = xs[temp_indices[i]];
         }
@@ -359,7 +393,7 @@ module ApplyOperator {
       }
     }
     else {
-      for i in 0 ..# batchSize {
+      foreach i in 0 ..# batchSize {
         out_coeffs[i] = xs[in_spins[i]:int];
       }
     }
@@ -457,12 +491,20 @@ module ApplyOperator {
     }
   }
   proc localMatVec(const ref matrix : Operator,
-                   const ref representatives : [] uint(64),
-                   const ref xs : [] ?eltType) {
-    var ys : [xs.domain] eltType = noinit;
+                   const ref xs : [] ?eltType,
+                   ref ys : [] ?eltType2)
+      where eltType == eltType2 {
+    const ref basis = matrix.basis;
+    const ref representatives = basis.representatives();
     localMatVec(matrix, representatives, xs, ys);
-    return ys;
   }
+  // proc localMatVec(const ref matrix : Operator,
+  //                  const ref representatives : [] uint(64),
+  //                  const ref xs : [] ?eltType) {
+  //   var ys : [xs.domain] eltType = noinit;
+  //   localMatVec(matrix, representatives, xs, ys);
+  //   return ys;
+  // }
 
   export proc bar(): int {
     return 0;

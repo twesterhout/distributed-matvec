@@ -33,14 +33,65 @@ proc testConstruction() {
 }
 
 
+config const kPhysicalSystem : string = "kagome12";
+
+proc benchmarkBuild(model : string) {
+  var timer = new Timer();
+
+  var json : string;
+  if (model == "chain10") {
+    json = "{\"number_spins\": 10, \"hamming_weight\": 5, \"spin_inversion\": -1,\
+             \"symmetries\": [\
+               {\"permutation\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 0], \"sector\": 5},\
+               {\"permutation\": [9, 8, 7, 6, 5, 4, 3, 2, 1, 0], \"sector\": 1}\
+             ] }";
+  } else if (model == "kagome12") {
+    json = "{\"number_spins\": 12, \"hamming_weight\": 6}";
+  }
+  else if (model == "kagome16") {
+    json = "{\"number_spins\": 16, \"hamming_weight\": 8}";
+  }
+  else if (model == "square4x4") {
+    json = "{\"number_spins\": 16, \"hamming_weight\": 8, \"spin_inversion\": 1,\
+             \"symmetries\": [\
+               {\"permutation\": [1, 2, 3, 0, 5, 6, 7, 4, 9, 10, 11, 8, 13, 14, 15, 12], \"sector\": 0},\
+               {\"permutation\": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3], \"sector\": 0},\
+               {\"permutation\": [3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12], \"sector\": 0},\
+               {\"permutation\": [12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3], \"sector\": 0},\
+               {\"permutation\": [3, 7, 11, 15, 2, 6, 10, 14, 1, 5, 9, 13, 0, 4, 8, 12], \"sector\": 0}\
+             ] }";
+  }
+  else {
+    halt("invalid model: " + model);
+  }
+
+  timer.start();
+  var basis = SpinBasis(json);
+  timer.stop();
+  writeln("Basis construction took: ", timer.elapsed(), " seconds");
+
+  timer.clear();
+  timer.start();
+  basis.build();
+  timer.stop();
+  writeln("Building representatives took: ", timer.elapsed(), " seconds");
+}
+
 
 proc main() {
   ls_hs_init();
+  
+  benchmarkBuild(kPhysicalSystem);
+
+  return 0;
 
   // testConstruction();
   // return 0;
+  var basis = SpinBasis(4, 2);
+  writeln(basis.numberSites());
+  writeln(basis.isHammingWeightFixed());
 
-  var basis = SpinChain10(); // SpinBasis(4, 2); // ls_hs_create_spin_basis(10, -1);
+  basis = SpinChain10(); // SpinBasis(4, 2); // ls_hs_create_spin_basis(10, -1);
   var tuples = reshape(
       [0, 1,
        1, 2,
