@@ -20,7 +20,7 @@ jobs:
         wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/v0.0.1/lattice-symmetries-haskell-ubuntu-18.04.zip
         unzip lattice-symmetries-haskell-ubuntu-18.04.zip
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
-        mv lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04 third_party
+        mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
         ldd third_party/lib/liblattice_symmetries_core.so
         ldd third_party/lib/liblattice_symmetries_haskell.so
     - name: Build Application
@@ -41,7 +41,7 @@ jobs:
         wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/v0.0.1/lattice-symmetries-haskell-macos-latest.zip
         unzip lattice-symmetries-haskell-macos-latest.zip
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-macos-latest.tar.bz2
-        mv lattice-symmetries-haskell-${LS_HS_VERSION}-macos-latest third_party
+        mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
         otool -L third_party/lib/liblattice_symmetries_core.dylib
         otool -L third_party/lib/liblattice_symmetries_haskell.dylib
     - name: Build Application
