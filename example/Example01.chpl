@@ -83,15 +83,17 @@ proc main() {
   
   benchmarkBuild(kPhysicalSystem);
 
-  return 0;
-
   // testConstruction();
   // return 0;
   var basis = SpinBasis(4, 2);
   writeln(basis.numberSites());
   writeln(basis.isHammingWeightFixed());
 
-  basis = SpinChain10(); // SpinBasis(4, 2); // ls_hs_create_spin_basis(10, -1);
+  basis = SpinBasis("{\"number_spins\": 10, \"hamming_weight\": 5, \"spin_inversion\": -1,\
+                      \"symmetries\": [\
+                        {\"permutation\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 0], \"sector\": 5},\
+                        {\"permutation\": [9, 8, 7, 6, 5, 4, 3, 2, 1, 0], \"sector\": 1}\
+                      ] }");
   var tuples = reshape(
       [0, 1,
        1, 2,

@@ -1,4 +1,5 @@
 module PRIMME {
+  use AllLocalesBarriers;
   use CPtr;
   use SysCTypes;
   require "primme.h";
@@ -210,21 +211,6 @@ module PRIMME {
     var maxPrevRetain : c_int;
   }
 
-  proc primmeMatrixMatvecImpl(type eltType, _x : c_void_ptr, _ldx : c_ptr(int(64)), _y : c_void_ptr, _ldy : c_ptr(int(64)),
-                              _blockSize : c_ptr(c_int), primme : c_ptr(primme_params), _ierr : c_ptr(c_int)) {
-    const blockSize = _blockSize.deref():int;
-    const ldx = _ldx.deref();
-    const ldy = _ldy.deref();
-    const n = primme.deref().n;
-    assert(ldx >= n);
-    assert(ldy >= n);
-    ref X = makeArrayFromPtr(_x : c_ptr(eltType), (blockSize, ldx))[.., 0 ..# n];
-    ref Y = makeArrayFromPtr(_y : c_ptr(eltType), (blockSize, ldy))[.., 0 ..# n];
-    // var b : chpl_external_array =
-    //   chpl_make_external_array_ptr(c_ptrTo(a[0]):c_void_ptr, a.size:uint);
-
-
-  }
   // proc primmeMatrixMatvec(x : c_void_ptr, ldx : c_ptr(int(64)), y : c_void_ptr, ldy : c_ptr(int(64)), blockSize : c_int,
   //                         primme : c_ptr(primme_params), ierr : c_ptr(c_int)) {
   // }
