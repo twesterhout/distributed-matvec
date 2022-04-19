@@ -12,11 +12,12 @@ jobs:
     - name: Install dependencies
       run: |
         apt-get update
-        apt-get install -y --no-install-recommends libnuma-dev libffi6 libgmp-dev bzip2
+        apt-get install -y --no-install-recommends libnuma-dev libgmp-dev bzip2
 
-        wget -q https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.2/chapel-dependencies-ubuntu-18.04.tar.bz2
-        tar -xf chapel-dependencies-ubuntu-18.04.tar.bz2
-        mv release third_party
+        wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/v0.0.1/lattice-symmetries-haskell-ubuntu-18.04.zip
+        unzip lattice-symmetries-haskell-ubuntu-18.04.zip
+        tar -xf lattice-symmetries-haskell-*-ubuntu-18.04.tar.bz2
+        mv lattice-symmetries-haskell-*-ubuntu-18.04 third_party
         ldd third_party/lib/liblattice_symmetries_core.so
         ldd third_party/lib/liblattice_symmetries_haskell.so
     - name: Build Application
@@ -34,9 +35,10 @@ jobs:
       run: |
         brew install chapel libffi
 
-        wget -q https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.2/chapel-dependencies-macos-latest.tar.bz2
-        tar -xf chapel-dependencies-macos-latest.tar.bz2
-        mv release third_party
+        wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/v0.0.1/lattice-symmetries-haskell-macos-latest.zip
+        unzip lattice-symmetries-haskell-macos-latest.zip
+        tar -xf lattice-symmetries-haskell-*-macos-latest.tar.bz2
+        mv lattice-symmetries-haskell-*-macos-latest third_party
         otool -L third_party/lib/liblattice_symmetries_core.dylib
         otool -L third_party/lib/liblattice_symmetries_haskell.dylib
     - name: Build Application
