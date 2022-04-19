@@ -17,6 +17,8 @@ jobs:
         wget -q https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.2/chapel-dependencies-ubuntu-18.04.tar.bz2
         tar -xf chapel-dependencies-ubuntu-18.04.tar.bz2
         mv release third_party
+        ldd third_party/lib/liblattice_symmetries_core.so
+        ldd third_party/lib/liblattice_symmetries_haskell.so
     - name: Build Application
       run: |
         make
@@ -35,8 +37,8 @@ jobs:
         wget -q https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.2/chapel-dependencies-macos-latest.tar.bz2
         tar -xf chapel-dependencies-macos-latest.tar.bz2
         mv release third_party
-        otool -l third_party/lib/liblattice_symmetries_core.dylib
-        otool -l third_party/lib/liblattice_symmetries_haskell.dylib
+        otool -L third_party/lib/liblattice_symmetries_core.dylib
+        otool -L third_party/lib/liblattice_symmetries_haskell.dylib
     - name: Build Application
       run: |
         make
