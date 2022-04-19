@@ -21,19 +21,14 @@ jobs:
         unzip lattice-symmetries-haskell-ubuntu-18.04.zip
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
-        ldd third_party/lib/liblattice_symmetries_core.so
+        patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
         ldd third_party/lib/liblattice_symmetries_haskell.so
-        cd third_party/lib
-        echo "Setting rpath ..."
-        patchelf --set-rpath '$ORIGIN' liblattice_symmetries_haskell.so
-        echo "New rpath:"
-        patchelf --print-rpath liblattice_symmetries_haskell.so
-        ldd liblattice_symmetries_haskell.so
     - name: Build Application
       run: |
         make
     - name: Run tests
       run: |
+        export LD_LIBRARY_PATH=$PWD/third_party/lib:$LD_LIBRARY_PATH
         bin/Example01
 
   mac_tests:
