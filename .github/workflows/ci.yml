@@ -1,0 +1,44 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  linux_tests:
+    runs-on: ubuntu-latest
+    container:
+      image: chapel/chapel # or chapel/chapel-gasnet-smp if you want multi-locale
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install dependencies
+      run: |
+        mkdir -p third_party
+        cd third_party
+        wget -q https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.2/chapel-dependencies-ubuntu-18.04.tar.bz2
+        tar -xf chapel-dependencies-ubuntu-18.04.tar.bz2
+        ls -l
+    # - name: Build Application
+    #   run: |
+    #     make
+    # - name: Run tests
+    #   run: |
+    #     make check
+
+  mac_tests:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install dependencies
+      run: |
+        brew install chapel
+
+        mkdir -p third_party
+        cd third_party
+        wget -q https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.2/chapel-dependencies-macos-latest.tar.bz2
+        tar -xf chapel-dependencies-macos-latest.tar.bz2
+        ls -l
+    # - name: Build Application
+    #   run: |
+    #     make
+    # - name: Run tests
+    #   run: |
+    #     make check
