@@ -12,7 +12,7 @@ jobs:
     - name: Install dependencies
       run: |
         apt-get update
-        apt-get install -y --no-install-recommends libnuma-dev libgmp-dev bzip2
+        apt-get install -y --no-install-recommends libnuma-dev libffi-dev libgmp-dev bzip2
 
         wget -q https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.2/chapel-dependencies-ubuntu-18.04.tar.bz2
         tar -xf chapel-dependencies-ubuntu-18.04.tar.bz2
@@ -30,7 +30,7 @@ jobs:
     - uses: actions/checkout@v2
     - name: Install dependencies
       run: |
-        brew install chapel
+        brew install chapel libffi
 
         wget -q https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.2/chapel-dependencies-macos-latest.tar.bz2
         tar -xf chapel-dependencies-macos-latest.tar.bz2
