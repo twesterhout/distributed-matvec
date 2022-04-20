@@ -21,7 +21,7 @@ jobs:
         wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/v0.0.1/lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
-        # patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
+        patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
         ldd third_party/lib/liblattice_symmetries_haskell.so
     - name: Build Application
       run: |
