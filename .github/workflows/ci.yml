@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 env:
-  LS_HS_VERSION: b9bfe34
+  LS_HS_VERSION: 8c704c6
 
 jobs:
   linux_tests:
