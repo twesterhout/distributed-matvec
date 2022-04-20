@@ -104,7 +104,7 @@ proc main() {
        7, 8,
        8, 9,
        9, 0], {0 ..# 10, 0 ..# 2});
-  var a = new Operator(basis, "σᶻ₀ σᶻ₁", tuples); 
+  var a = new Operator(basis, "sigma sigma", tuples); 
   var b = new Operator(basis, "σˣ₀ σˣ₁", tuples);
   var c = new Operator(basis, "σʸ₀ σʸ₁", tuples);
   var timer = new Timer();
