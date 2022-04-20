@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 env:
-  LS_HS_VERSION: 737b27c
+  LS_HS_VERSION: 45ff0e1
 
 jobs:
   linux_tests:
@@ -36,6 +36,8 @@ jobs:
     - uses: actions/checkout@v2
     - name: Install dependencies
       run: |
+        brew install chapel
+
         wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/v0.0.1/lattice-symmetries-haskell-${LS_HS_VERSION}-macos-latest.tar.bz2
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-macos-latest.tar.bz2
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
