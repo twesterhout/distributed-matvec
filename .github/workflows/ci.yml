@@ -7,7 +7,8 @@ env:
 
 jobs:
   linux_tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-18.04
+    # latest
     container:
       image: chapel/chapel # or chapel/chapel-gasnet-smp if you want multi-locale
     steps:
@@ -15,12 +16,12 @@ jobs:
     - name: Install dependencies
       run: |
         apt-get update
-        apt-get install -y --no-install-recommends libnuma-dev libgmp-dev patchelf bzip2 unzip
+        apt-get install -y --no-install-recommends libnuma-dev libgmp-dev libffi patchelf bzip2 unzip
 
         wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/v0.0.1/lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
-        patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
+        # patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
         ldd third_party/lib/liblattice_symmetries_haskell.so
     - name: Build Application
       run: |
