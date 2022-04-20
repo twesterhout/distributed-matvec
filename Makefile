@@ -17,7 +17,7 @@ MODULES = src/ApplyOperator.chpl src/StatesEnumeration.chpl
 
 
 bin/Example01: example/Example01.chpl $(MODULES)
-	@mkdir $(@D)
+	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 
 
