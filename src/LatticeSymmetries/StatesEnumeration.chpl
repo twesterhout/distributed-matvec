@@ -1,11 +1,13 @@
 module StatesEnumeration {
 
-use ApplyOperator;
-
+use Types;
+use FFI;
 use BitOps;
-use CPtr;
 use List;
+// use CTypes;
+use CPtr;
 use SysCTypes;
+use IO;
 
 /* Get next integer with the same hamming weight.
 
@@ -121,8 +123,13 @@ private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64), c
   return rs;
 }
 
+var global_count : atomic int = 0;
+
 private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64), basis : c_ptr(ls_hs_basis)) {
+  try! stderr.writeln("Calling enumerateStatesFixedHamming ...");
+  global_count.add(1);
   assert(popcount(lower) == popcount(upper));
+  // try! stderr.writeln("lower=", lower, " upper=", upper);
   var _alphas : c_array(uint(64), 2);
   _alphas[0] = lower;
   _alphas[1] = upper;
@@ -130,18 +137,21 @@ private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64), bas
   ls_hs_state_index(basis, 2, _alphas, 1, _indices, 1);
   var lowerIdx = _indices[0]; // ls_hs_internal_rank_via_combinadics(lower, binomials);
   var upperIdx = _indices[1]; // ls_hs_internal_rank_via_combinadics(upper, binomials);
+  // try! stderr.writeln("lowerIdx=", lowerIdx, " upperIdx=", upperIdx);
   var rs : [0 ..# (upperIdx - lowerIdx + 1)] uint(64) = noinit;
   var v = lower;
   for i in rs.domain {
     rs[i] = v;
     v = nextStateFixedHamming(v);
   }
+  // try! stderr.writeln("done!");
   return rs;
 }
 
 proc localEnumerateRepresentatives(const ref basis : Basis,
                                    lower : uint(64) = basis.minStateEstimate(),
                                    upper : uint(64) = basis.maxStateEstimate()) : [] uint(64) {
+  writeln("inside localEnumerateRepresentatives ...");
   if (basis.requiresProjection()) {
     return enumerateStatesWithProjection(lower, upper, basis);
   }
@@ -149,7 +159,30 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
     var rs : [0 ..# (upper - lower + 1)] uint(64) = lower .. upper;
     return rs;
   }
-  if (ls_hs_basis_has_fixed_hamming_weight(basis.payload)) {
+  if (basis.isHammingWeightFixed()) {
+    writeln("Ping");
+    /*
+    try! stderr.writeln("Calling enumerateStatesFixedHamming ...");
+    global_count.add(1);
+    assert(popcount(lower) == popcount(upper));
+    try! stderr.writeln("lower=", lower, " upper=", upper);
+    var _alphas : c_array(uint(64), 2);
+    _alphas[0] = lower;
+    _alphas[1] = upper;
+    var _indices : c_array(c_ptrdiff, 2);
+    ls_hs_state_index(basis.payload, 2, _alphas, 1, _indices, 1);
+    var lowerIdx = _indices[0]; // ls_hs_internal_rank_via_combinadics(lower, binomials);
+    var upperIdx = _indices[1]; // ls_hs_internal_rank_via_combinadics(upper, binomials);
+    try! stderr.writeln("lowerIdx=", lowerIdx, " upperIdx=", upperIdx);
+    var rs : [0 ..# (upperIdx - lowerIdx + 1)] uint(64) = noinit;
+    var v = lower;
+    for i in rs.domain {
+      rs[i] = v;
+      v = nextStateFixedHamming(v);
+    }
+    try! stderr.writeln("done!");
+    return rs;
+    */
     return enumerateStatesFixedHamming(lower, upper, basis.payload);
   }
 
@@ -158,8 +191,6 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
   const mask = (1 << numberSites) - 1; // isolate the lower numberSites bits
   const numberUp = basis.numberUp();
   const numberDown = basis.numberParticles() - numberUp;
-  // writeln("numberUp = ", numberUp, ", numberDown = ", numberDown);
-
   const basisA = SpinBasis(numberSites, numberUp);
   const basisB = SpinBasis(numberSites, numberDown);
   // NOTE: Chapel doesn't seem to support recursive functions returning arrays :(
@@ -167,10 +198,8 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
   // const rsB = localEnumerateRepresentatives(basisB,
   //   (lower >> numberSites) & mask, (upper >> numberSites) & mask);
   const rsA = enumerateStatesFixedHamming(lower & mask, upper & mask, basisA.payload);
-  // writeln("rsA: ", rsA);
   const rsB = enumerateStatesFixedHamming((lower >> numberSites) & mask, (upper >> numberSites) & mask,
                                           basisB.payload);
-  // writeln("rsB: ", rsB);
 
   var rs : [0 ..# (rsA.size * rsB.size)] uint(64) = noinit;
   var offset : int = 0;
@@ -221,7 +250,9 @@ export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
                                               upper : uint(64),
                                               dest : c_ptr(chpl_external_array)) {
   const basis = new Basis(p, owning=false);
+  writeln("calling localEnumerateRepresentatives ...");
   var rs = localEnumerateRepresentatives(basis, lower, upper);
+  writeln("calling convertToExternalArray ...");
   dest.deref() = convertToExternalArray(rs);
 }
 

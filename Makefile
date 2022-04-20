@@ -13,13 +13,23 @@ endif
 PRIMME_CFLAGS = -I/home/tom/src/primme/include
 PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -lopenblas -lm -lgomp -lpthread
 
-MODULES = src/ApplyOperator.chpl src/StatesEnumeration.chpl src/helper.c
+# MODULES = src/ApplyOperator.chpl src/StatesEnumeration.chpl src/helper.c
+MODULES = src/LatticeSymmetries.chpl \
+	  src/LatticeSymmetries/FFI.chpl \
+	  src/LatticeSymmetries/HDF5.chpl \
+	  src/LatticeSymmetries/Types.chpl \
+	  src/LatticeSymmetries/StatesEnumeration.chpl \
+	  src/LatticeSymmetries/helper.c
 
+all: bin/Example01
+
+bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(MODULES)
+	@mkdir -p $(@D)
+	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 
 bin/Example01: example/Example01.chpl $(MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
-
 
 # Dummy file we use to reproduce internal compiler errors in Chapel for
 # submitting issues.

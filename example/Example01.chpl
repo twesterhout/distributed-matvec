@@ -1,5 +1,4 @@
-use ApplyOperator;
-use StatesEnumeration;
+use LatticeSymmetries;
 use Time;
 
 proc bas() {
@@ -80,7 +79,7 @@ proc benchmarkBuild(model : string) {
 
 proc main() {
   ls_hs_init();
-  
+
   benchmarkBuild(kPhysicalSystem);
 
   // testConstruction();
