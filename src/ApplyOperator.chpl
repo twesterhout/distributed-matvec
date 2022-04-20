@@ -118,6 +118,7 @@ module ApplyOperator {
   }
   extern proc ls_hs_internal_set_chpl_kernels(kernels : c_ptr(ls_chpl_kernels));
 
+  extern proc print_external_string(s : c_string);
 
   record Basis {
     var payload : c_ptr(ls_hs_basis);
@@ -275,6 +276,7 @@ module ApplyOperator {
       const c_indices = indices:c_int;
       const c_expr = expression.localize().c_str();
       writeln("Creating operator from '", c_expr:string,  "'");
+      print_external_string(c_expr);
       this.payload = ls_hs_create_operator(basis.payload, c_expr,
         indices.dim(0).size:c_int, indices.dim(1).size:c_int, c_const_ptrTo(c_indices));
       writeln("Done creating operator!");
