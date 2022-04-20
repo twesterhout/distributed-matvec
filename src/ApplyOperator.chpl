@@ -118,6 +118,8 @@ module ApplyOperator {
   }
   extern proc ls_hs_internal_set_chpl_kernels(kernels : c_ptr(ls_chpl_kernels));
 
+  require "helper.h";
+
   extern proc print_external_string(s : c_string);
 
   record Basis {

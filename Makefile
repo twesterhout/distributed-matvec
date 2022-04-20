@@ -4,8 +4,7 @@
 UNAME = $(shell uname)
 OPTIMIZATION ?= --debug
 COMPILER ?= llvm
-CFLAGS = -Ithird_party/include $(OPTIMIZATION)
-# --target-compiler=$(COMPILER)
+CFLAGS = -Ithird_party/include $(OPTIMIZATION) --target-compiler=$(COMPILER)
 LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries_core
 ifeq ($(UNAME), Linux)
   LDFLAGS += -lnuma
