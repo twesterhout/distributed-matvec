@@ -9,6 +9,7 @@ use List;
 use CPtr;
 use SysCTypes;
 use IO;
+use DynamicIters;
 
 /* Get next integer with the same hamming weight.
 
@@ -38,7 +39,7 @@ private inline proc nextState(v: uint(64), param isHammingWeightFixed : bool): u
  */
 private inline proc manyNextStateImpl(in v: uint(64), bound: uint(64), buffer: [] uint(64),
                                       param isHammingWeightFixed : bool) : int {
-  assert(v <= bound);
+  assert(v <= bound, "v is greater than bound");
   for i in buffer.domain {
     buffer[i] = v;
     // If v == bound, incrementing v further is unsafe because it can overflow.
@@ -61,7 +62,7 @@ private inline proc setBit(bits: uint(64), i: int) { return bits | (1:uint(64) <
 /* Get the closest to `x` integer with Hamming weight `hammingWeight`.
  */
 private inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
-  assert(hammingWeight <= 64);
+  assert(hammingWeight <= 64, "Hamming weight too big");
   var weight = popcount(x);
   if (weight > hammingWeight) {
       // Keep clearing lowest bits until we reach the desired Hamming weight.
@@ -93,11 +94,13 @@ private inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint)
   return x;
 }
 
-config const isRepresentativeBatchSize : int = 3;
+config const isRepresentativeBatchSize : int = 65536;
 
 private inline iter findStatesInRange(in lower: uint(64), upper: uint(64),
                                       isHammingWeightFixed : bool,
                                       const ref basis : Basis) {
+  if lower > upper then
+    return;
   var buffer: [0 ..# isRepresentativeBatchSize] uint(64) = noinit;
   var flags: [0 ..# isRepresentativeBatchSize] uint(8) = noinit;
   var norms: [0 ..# isRepresentativeBatchSize] real(64) = noinit;
@@ -114,21 +117,86 @@ private inline iter findStatesInRange(in lower: uint(64), upper: uint(64),
   }
 }
 
+config const enumerateStatesWithProjectionNumChunks : int = 10 * here.maxTaskPar;
+
+/* We want to split `r` into `numChunks` non-overlapping ranges but such that for each range
+   `chunk` we have that `popcount(chunk.low) == popcount(chunk.high) == popcount(r.low)` if
+   `isHammingWeightFixed` was set to `true`.
+ */
+iter _customChunks(r : range(uint(64)), numChunks : int, isHammingWeightFixed : bool) {
+  logDebug("Creating " + numChunks:string + " chunks for a range with " + r.size:string + " values ...");
+  assert(r.size >= numChunks, "more chunks than elements");
+  // Start by splitting r into numChunks chunks without worrying about the Hamming weight
+  const chunkSize : real = r.size:real / numChunks;
+  var offsets : [0 ..# numChunks + 1] uint(64) = noinit;
+  foreach i in 0 ..# numChunks {
+    offsets[i] = r.low + (i * chunkSize):uint;
+    assert(offsets[i] <= r.high, "offsets[i] <= r.high");
+  }
+  offsets[numChunks] = r.high;
+
+  if isHammingWeightFixed {
+    assert(popcount(r.low) == popcount(r.high), "Hamming weight error");
+    const hamming = popcount(r.low);
+    foreach x in offsets[1 ..# numChunks - 1] do
+      x = closestWithFixedHamming(x, hamming);
+    foreach x in offsets do
+      assert(popcount(x) == popcount(r.low), "Hamming weight error");
+  }
+
+  var b = offsets[0];
+  var e = offsets[1];
+  assert(b <= e);
+  yield b .. e;
+  for i in 1 ..# numChunks - 1 {
+    b = offsets[i];
+    e = offsets[i + 1];
+    assert(b <= e);
+    b = if isHammingWeightFixed then nextState(b, true)
+                                else nextState(b, false);
+    if b > e then yield e + 1 .. e;
+             else yield b .. e;
+  }
+}
+
+
 private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64),
                                            const ref basis : Basis) {
-  logDebug("Calling enumerateStatesWithProjection ...");
+  logDebug("Calling enumerateStatesWithProjection lower=" + lower:string +
+           ", upper=" + upper:string + " ...");
   const isHammingWeightFixed = basis.isHammingWeightFixed();
-  var buffer : list(uint(64));
-  for x in findStatesInRange(lower, upper, isHammingWeightFixed, basis) {
-    buffer.append(x);
+  const numChunks : int = min(enumerateStatesWithProjectionNumChunks, (upper - lower + 1):int);
+  var todo : [0 ..# numChunks] range(uint(64)) = _customChunks(lower .. upper, numChunks, isHammingWeightFixed);
+  var buffers : [0 ..# numChunks] list(uint(64));
+  var countAccumulator : atomic int = 0;
+  forall i in dynamic(0 ..# numChunks) {
+    const ref chunk = todo[i];
+    ref buffer = buffers[i];
+    for x in findStatesInRange(chunk.low:uint, chunk.high:uint, isHammingWeightFixed, basis) {
+      buffer.append(x);
+    }
+    countAccumulator.add(buffer.size);
+    // writeln(chunk, ": ", buffer);
   }
-  var rs : [0 ..# buffer.size] uint(64) = buffer;
+  // var buffer : list(uint(64));
+  // for x in findStatesInRange(lower, upper, isHammingWeightFixed, basis) {
+  //   buffer.append(x);
+  // }
+  const count : int = countAccumulator.read();
+  var rs : [0 ..# count] uint(64) = noinit;
+  var offset = 0;
+  for buffer in buffers {
+    rs[offset ..# buffer.size] = buffer;
+    offset += buffer.size;
+  }
+  assert(offset == count);
   return rs;
 }
 
 private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64),
                                          const ref basis : Basis) {
-  logDebug("Calling enumerateStatesFixedHamming ...");
+  logDebug("Calling enumerateStatesFixedHamming lower=" + lower:string +
+           ", upper=" + upper:string + " ...");
   assert(popcount(lower) == popcount(upper));
   // The following computes indices of lower and upper
   var _alphas : c_array(uint(64), 2);
