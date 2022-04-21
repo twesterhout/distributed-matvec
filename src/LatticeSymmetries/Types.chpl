@@ -27,9 +27,7 @@ module Types {
       _destroy();
     }
 
-    proc build() {
-      writeln("calling ls_hs_basis_build ...");
-      ls_hs_basis_build(payload); }
+    proc build() { ls_hs_basis_build(payload); }
 
     proc isSpinBasis() { return payload.deref().particle_type == LS_HS_SPIN; }
     proc isSpinfulFermionicBasis() { return payload.deref().particle_type == LS_HS_SPINFUL_FERMION; }
@@ -127,11 +125,9 @@ module Types {
 
       const c_indices = indices:c_int;
       const c_expr = expression.localize().c_str();
-      writeln("Creating operator from '", c_expr:string,  "'");
       print_external_string(c_expr);
       this.payload = ls_hs_create_operator(basis.payload, c_expr,
         indices.dim(0).size:c_int, indices.dim(1).size:c_int, c_const_ptrTo(c_indices));
-      writeln("Done creating operator!");
       this.basis = new Basis(this.payload.deref().basis, owning=false);
     }
     proc init(raw : c_ptr(ls_hs_operator), owning : bool = true) {

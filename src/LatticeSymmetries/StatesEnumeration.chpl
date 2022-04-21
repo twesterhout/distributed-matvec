@@ -116,7 +116,7 @@ private inline iter findStatesInRange(in lower: uint(64), upper: uint(64),
 
 private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64),
                                            const ref basis : Basis) {
-  writeln("[Chapel] Calling enumerateStatesWithProjection ...");
+  logDebug("Calling enumerateStatesWithProjection ...");
   const isHammingWeightFixed = basis.isHammingWeightFixed();
   var buffer : list(uint(64));
   for x in findStatesInRange(lower, upper, isHammingWeightFixed, basis) {
@@ -128,7 +128,7 @@ private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64),
 
 private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64),
                                          const ref basis : Basis) {
-  writeln("[Chapel] Calling enumerateStatesFixedHamming ...");
+  logDebug("Calling enumerateStatesFixedHamming ...");
   assert(popcount(lower) == popcount(upper));
   // The following computes indices of lower and upper
   var _alphas : c_array(uint(64), 2);
@@ -234,7 +234,7 @@ proc initExportedKernels() {
   var kernels = new ls_chpl_kernels(
     c_ptrTo(ls_chpl_enumerate_representatives)
   );
-  writeln("Setting chpl_kernels ...");
+  logDebug("Initializing chpl_kernels ...");
   ls_hs_internal_set_chpl_kernels(c_ptrTo(kernels));
 }
 initExportedKernels();

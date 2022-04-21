@@ -2,6 +2,7 @@ module FFI {
   // use CTypes;
   use CPtr;
   use SysCTypes;
+  use IO;
 
   pragma "no doc"
   pragma "fn synchronization free"
@@ -19,6 +20,11 @@ module FFI {
   inline proc c_const_ptrTo(const ref x) {
     return c_pointer_return(x);
   }
+
+  proc logDebug(msg) {
+    try! stderr.writeln("[Debug]   ", msg);
+  }
+
 
   require "lattice_symmetries_haskell.h";
 

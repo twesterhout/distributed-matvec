@@ -32,13 +32,11 @@ module HDF5 {
   proc readDataset(filename : string, dataset : string, type eltType, param rank : int)
       where rank == 1 {
     const shape = datasetShape(filename, dataset);
-    writeln("Reading ", dataset, " of shape ", shape, " from ", filename, " ...");
     return readDatasetChunk(filename, dataset, eltType, (0,), (shape[0],));
   }
   proc readDataset(filename : string, dataset : string, type eltType, param rank : int)
       where rank == 2 {
     const shape = datasetShape(filename, dataset);
-    writeln("Reading ", dataset, " of shape ", shape, " from ", filename, " ...");
     return readDatasetChunk(filename, dataset, eltType, (0, 0), (shape[0], shape[1]));
   }
 

@@ -36,7 +36,7 @@ CHPL_ARGS =
 examples: bin/Example01
 
 .PHONY: test
-test: bin/TestStatesEnumeration
+test: bin/TestStatesEnumeration bin/TestMatrixVectorProduct
 
 .PHONY: check
 check: check-states-enumeration check-matrix-vector-product
