@@ -12,14 +12,10 @@ proc main() {
 
   const reference = localLoadRepresentatives(kRepresentatives);
   var basis = loadBasisFromYaml(kBasis);
-  writeln("Calling basis.build() ...");
   basis.build();
-  writeln("Calling basis.representatives() ...");
   assert(reference == basis.representatives());
-  writeln(global_count);
 }
 
 proc deinit() {
   ls_hs_exit();
 }
-

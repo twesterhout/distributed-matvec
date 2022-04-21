@@ -18,20 +18,30 @@ jobs:
         apt-get update
         apt-get install -y --no-install-recommends libnuma-dev libgmp-dev libffi-dev patchelf bzip2 unzip
 
-        sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
-        echo 'LANG="en_US.UTF-8"' >/etc/default/locale
-        dpkg-reconfigure --frontend=noninteractive locales
-        update-locale LANG=en_US.UTF-8
+        # sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+        # echo 'LANG="en_US.UTF-8"' >/etc/default/locale
+        # dpkg-reconfigure --frontend=noninteractive locales
+        # update-locale LANG=en_US.UTF-8
 
         wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/v0.0.1/lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
         patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
         ldd third_party/lib/liblattice_symmetries_haskell.so
-    - name: Build Application
+    - name: Build
       run: |
         make
-    - name: Run tests
+    - uses: actions/cache@v3
+      name: Cache test data
+      with:
+        path: |
+          data/construction
+          data/matvec
+        key: test-data-v1
+    - name: Test
+      run: |
+        make check
+    - name: Run examples
       run: |
         export LD_LIBRARY_PATH=$PWD/third_party/lib:$LD_LIBRARY_PATH
         bin/Example01
@@ -48,10 +58,20 @@ jobs:
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-macos-latest.tar.bz2
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
         otool -L third_party/lib/liblattice_symmetries_haskell.dylib
-    - name: Build Application
+    - name: Build
       run: |
         make
-    - name: Run tests
+    - uses: actions/cache@v3
+      name: Cache test data
+      with:
+        path: |
+          data/construction
+          data/matvec
+        key: test-data-v1
+    - name: Test
+      run: |
+        make check
+    - name: Run examples
       run: |
         export DYLD_LIBRARY_PATH=$PWD/third_party/lib:$DYLD_LIBRARY_PATH
         bin/Example01

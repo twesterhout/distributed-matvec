@@ -2,6 +2,7 @@ module StatesEnumeration {
 
 use Types;
 use FFI;
+
 use BitOps;
 use List;
 // use CTypes;
@@ -113,7 +114,9 @@ private inline iter findStatesInRange(in lower: uint(64), upper: uint(64),
   }
 }
 
-private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64), const ref basis : Basis) {
+private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64),
+                                           const ref basis : Basis) {
+  writeln("[Chapel] Calling enumerateStatesWithProjection ...");
   const isHammingWeightFixed = basis.isHammingWeightFixed();
   var buffer : list(uint(64));
   for x in findStatesInRange(lower, upper, isHammingWeightFixed, basis) {
@@ -123,35 +126,32 @@ private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64), c
   return rs;
 }
 
-var global_count : atomic int = 0;
-
-private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64), basis : c_ptr(ls_hs_basis)) {
-  try! stderr.writeln("Calling enumerateStatesFixedHamming ...");
-  global_count.add(1);
+private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64),
+                                         const ref basis : Basis) {
+  writeln("[Chapel] Calling enumerateStatesFixedHamming ...");
   assert(popcount(lower) == popcount(upper));
-  // try! stderr.writeln("lower=", lower, " upper=", upper);
+  // The following computes indices of lower and upper
   var _alphas : c_array(uint(64), 2);
   _alphas[0] = lower;
   _alphas[1] = upper;
   var _indices : c_array(c_ptrdiff, 2);
-  ls_hs_state_index(basis, 2, _alphas, 1, _indices, 1);
-  var lowerIdx = _indices[0]; // ls_hs_internal_rank_via_combinadics(lower, binomials);
-  var upperIdx = _indices[1]; // ls_hs_internal_rank_via_combinadics(upper, binomials);
-  // try! stderr.writeln("lowerIdx=", lowerIdx, " upperIdx=", upperIdx);
+  ls_hs_state_index(basis.payload, 2, _alphas, 1, _indices, 1);
+  var lowerIdx = _indices[0];
+  var upperIdx = _indices[1];
+  // Now that we know the lowerIdx and upperIdx, it's trivial to allocate an
+  // array of the right size
   var rs : [0 ..# (upperIdx - lowerIdx + 1)] uint(64) = noinit;
   var v = lower;
   for i in rs.domain {
     rs[i] = v;
     v = nextStateFixedHamming(v);
   }
-  // try! stderr.writeln("done!");
   return rs;
 }
 
 proc localEnumerateRepresentatives(const ref basis : Basis,
                                    lower : uint(64) = basis.minStateEstimate(),
-                                   upper : uint(64) = basis.maxStateEstimate()) : [] uint(64) {
-  writeln("inside localEnumerateRepresentatives ...");
+                                   upper : uint(64) = basis.maxStateEstimate()) {
   if (basis.requiresProjection()) {
     return enumerateStatesWithProjection(lower, upper, basis);
   }
@@ -160,30 +160,7 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
     return rs;
   }
   if (basis.isHammingWeightFixed()) {
-    writeln("Ping");
-    /*
-    try! stderr.writeln("Calling enumerateStatesFixedHamming ...");
-    global_count.add(1);
-    assert(popcount(lower) == popcount(upper));
-    try! stderr.writeln("lower=", lower, " upper=", upper);
-    var _alphas : c_array(uint(64), 2);
-    _alphas[0] = lower;
-    _alphas[1] = upper;
-    var _indices : c_array(c_ptrdiff, 2);
-    ls_hs_state_index(basis.payload, 2, _alphas, 1, _indices, 1);
-    var lowerIdx = _indices[0]; // ls_hs_internal_rank_via_combinadics(lower, binomials);
-    var upperIdx = _indices[1]; // ls_hs_internal_rank_via_combinadics(upper, binomials);
-    try! stderr.writeln("lowerIdx=", lowerIdx, " upperIdx=", upperIdx);
-    var rs : [0 ..# (upperIdx - lowerIdx + 1)] uint(64) = noinit;
-    var v = lower;
-    for i in rs.domain {
-      rs[i] = v;
-      v = nextStateFixedHamming(v);
-    }
-    try! stderr.writeln("done!");
-    return rs;
-    */
-    return enumerateStatesFixedHamming(lower, upper, basis.payload);
+    return enumerateStatesFixedHamming(lower, upper, basis);
   }
 
   assert(basis.isSpinfulFermionicBasis());
@@ -197,9 +174,8 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
   // const rsA = localEnumerateRepresentatives(basisA, lower & mask, upper & mask);
   // const rsB = localEnumerateRepresentatives(basisB,
   //   (lower >> numberSites) & mask, (upper >> numberSites) & mask);
-  const rsA = enumerateStatesFixedHamming(lower & mask, upper & mask, basisA.payload);
-  const rsB = enumerateStatesFixedHamming((lower >> numberSites) & mask, (upper >> numberSites) & mask,
-                                          basisB.payload);
+  const rsA = enumerateStatesFixedHamming(lower & mask, upper & mask, basisA);
+  const rsB = enumerateStatesFixedHamming((lower >> numberSites) & mask, (upper >> numberSites) & mask, basisB);
 
   var rs : [0 ..# (rsA.size * rsB.size)] uint(64) = noinit;
   var offset : int = 0;
@@ -212,47 +188,45 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
   return rs;
 }
 
-  // proc _generateBucketRanges() {
-  //   coforall loc in Locales do on loc {
-  //     ref localRanges = _ranges[loc.id];
-  //     ref localStates = _representatives[loc.id][0 ..# _counts[loc.id]];
-  //     const numberBuckets = 1 << _numberBits;
-  //     var offset = 0;
-  //     for i in 0 ..# numberBuckets {
-  //       localRanges[i] = offset;
-  //       // writeln("ranges[", loc.id, "][", i, "] = ", offset);
-  //       while offset != localStates.size && bucketIndex(localStates[offset]) == i {
-  //         offset += 1;
-  //       }
-  //     }
-  //     localRanges[numberBuckets] = offset;
-  //     assert(offset == localStates.size);
-  //   }
-  // }
-proc localOffsetsForStates(numberBits : int, shift : int,
-                           const ref representatives : [?D] uint(64)) : [] int(64) {
-  const numberBuckets = 1 << numberBits;
-  var ranges : [0 ..# numberBuckets + 1] int(64);
-  var offset = 0;
-  for i in 0 ..# numberBuckets {
-    ranges[i] = offset;
-    while offset != representatives.size && (representatives[offset] >> shift):int == i {
-      offset += 1;
-    }
-  }
-  ranges[numberBuckets] = offset;
-  assert(offset == representatives.size);
-  return ranges;
-}
+// proc _generateBucketRanges() {
+//   coforall loc in Locales do on loc {
+//     ref localRanges = _ranges[loc.id];
+//     ref localStates = _representatives[loc.id][0 ..# _counts[loc.id]];
+//     const numberBuckets = 1 << _numberBits;
+//     var offset = 0;
+//     for i in 0 ..# numberBuckets {
+//       localRanges[i] = offset;
+//       // writeln("ranges[", loc.id, "][", i, "] = ", offset);
+//       while offset != localStates.size && bucketIndex(localStates[offset]) == i {
+//         offset += 1;
+//       }
+//     }
+//     localRanges[numberBuckets] = offset;
+//     assert(offset == localStates.size);
+//   }
+// }
+// proc localOffsetsForStates(numberBits : int, shift : int,
+//                            const ref representatives : [?D] uint(64)) {
+//   const numberBuckets = 1 << numberBits;
+//   var ranges : [0 ..# numberBuckets + 1] int(64);
+//   var offset = 0;
+//   for i in 0 ..# numberBuckets {
+//     ranges[i] = offset;
+//     while offset != representatives.size && (representatives[offset] >> shift):int == i {
+//       offset += 1;
+//     }
+//   }
+//   ranges[numberBuckets] = offset;
+//   assert(offset == representatives.size);
+//   return ranges;
+// }
 
 export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
                                               lower : uint(64),
                                               upper : uint(64),
                                               dest : c_ptr(chpl_external_array)) {
   const basis = new Basis(p, owning=false);
-  writeln("calling localEnumerateRepresentatives ...");
   var rs = localEnumerateRepresentatives(basis, lower, upper);
-  writeln("calling convertToExternalArray ...");
   dest.deref() = convertToExternalArray(rs);
 }
 

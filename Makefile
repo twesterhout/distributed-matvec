@@ -21,7 +21,45 @@ MODULES = src/LatticeSymmetries.chpl \
 	  src/LatticeSymmetries/StatesEnumeration.chpl \
 	  src/LatticeSymmetries/helper.c
 
-all: bin/Example01
+.PHONY: all
+all: test examples
+
+ifeq ($(UNAME), Linux)
+  CHPL_LIBS = LD_LIBRARY_PATH=$(PWD)/third_party/lib:$$LD_LIBRARY_PATH
+endif
+ifeq ($(UNAME), Darwin)
+  CHPL_LIBS = DYLD_LIBRARY_PATH=$(PWD)/third_party/lib:$$DYLD_LIBRARY_PATH
+endif
+CHPL_ARGS =
+
+.PHONY: examples
+examples: bin/Example01
+
+.PHONY: test
+test: bin/TestStatesEnumeration
+
+.PHONY: check
+check: check-states-enumeration
+
+.PHONY: check-states-enumeration
+check-states-enumeration: bin/TestStatesEnumeration data/construction
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_chain_10.yaml --kRepresentatives data/construction/heisenberg_chain_10.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_12.yaml --kRepresentatives data/construction/heisenberg_kagome_12.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_16.yaml --kRepresentatives data/construction/heisenberg_kagome_16.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_square_4x4.yaml --kRepresentatives data/construction/heisenberg_square_4x4.h5
+
+
+TEST_DATA_URL = https://surfdrive.surf.nl/files/index.php/s/OK5527Awfgl1hT2/download
+
+data/construction:
+	mkdir -p data && cd data && \
+	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Fconstruction && \
+	unzip tmp.zip && rm tmp.zip
+
+data/matvec:
+	mkdir -p data && cd data && \
+	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Fmatvec && \
+	unzip tmp.zip && rm tmp.zip
 
 bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(MODULES)
 	@mkdir -p $(@D)
@@ -36,7 +74,6 @@ bin/Example01: example/Example01.chpl $(MODULES)
 .PHONY: error
 error: src/error.chpl
 	chpl -o $@ $^
-
 
 .PHONY: clean
 clean:
