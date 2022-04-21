@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 env:
-  LS_HS_VERSION: 8c704c6
+  LS_HS_VERSION: 7af5a00
 
 jobs:
   linux_tests:
@@ -37,7 +37,7 @@ jobs:
         path: |
           data/construction
           data/matvec
-        key: test-data-v1
+        key: test-data-v2
     - name: Test
       run: |
         make check
