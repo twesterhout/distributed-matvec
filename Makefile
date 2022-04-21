@@ -6,9 +6,9 @@ OPTIMIZATION ?= --debug
 COMPILER ?= llvm
 CFLAGS = -Ithird_party/include $(OPTIMIZATION) --target-compiler=$(COMPILER)
 LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries_core
-ifeq ($(UNAME), Linux)
-  LDFLAGS += -lnuma
-endif
+# ifeq ($(UNAME), Linux)
+#   LDFLAGS += -lnuma
+# endif
 
 PRIMME_CFLAGS = -I/home/tom/src/primme/include
 PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -lopenblas -lm -lgomp -lpthread
@@ -39,14 +39,20 @@ examples: bin/Example01
 test: bin/TestStatesEnumeration
 
 .PHONY: check
-check: check-states-enumeration
+check: check-states-enumeration check-matrix-vector-product
 
 .PHONY: check-states-enumeration
 check-states-enumeration: bin/TestStatesEnumeration data/construction
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_chain_10.yaml --kRepresentatives data/construction/heisenberg_chain_10.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_12.yaml --kRepresentatives data/construction/heisenberg_kagome_12.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_16.yaml --kRepresentatives data/construction/heisenberg_kagome_16.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_square_4x4.yaml --kRepresentatives data/construction/heisenberg_square_4x4.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/old/heisenberg_square_4x4.yaml --kRepresentatives data/construction/heisenberg_square_4x4.h5
+
+.PHONY: check-matrix-vector-product
+check-matrix-vector-product: bin/TestMatrixVectorProduct data/matvec
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_4.yaml --kVectors data/matvec/heisenberg_chain_4.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_10.yaml --kVectors data/matvec/heisenberg_chain_10.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_16.yaml --kVectors data/matvec/heisenberg_kagome_16.h5
 
 
 TEST_DATA_URL = https://surfdrive.surf.nl/files/index.php/s/OK5527Awfgl1hT2/download
@@ -62,6 +68,10 @@ data/matvec:
 	unzip tmp.zip && rm tmp.zip
 
 bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(MODULES)
+	@mkdir -p $(@D)
+	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+
+bin/TestMatrixVectorProduct: test/TestMatrixVectorProduct.chpl $(MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 

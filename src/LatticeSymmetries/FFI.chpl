@@ -93,6 +93,8 @@ module FFI {
   extern proc ls_hs_print_terms(op : c_ptr(ls_hs_operator));
   extern proc ls_hs_destroy_operator_v2(op : c_ptr(ls_hs_operator));
 
+  extern proc ls_hs_load_hamiltonian_from_yaml(filename : c_string) : c_ptr(ls_hs_operator);
+
   extern proc ls_hs_operator_apply_diag_kernel(op : c_ptr(ls_hs_operator),
     batchSize : c_ptrdiff, alphas : c_ptr(uint(64)), alphas_stride : c_ptrdiff,
     coeffs : c_ptr(complex(128)));

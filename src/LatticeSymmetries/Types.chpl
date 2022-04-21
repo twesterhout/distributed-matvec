@@ -173,6 +173,13 @@ module Types {
 
   }
 
+  proc loadHamiltonianFromYaml(filename : string) {
+    var ptr = ls_hs_load_hamiltonian_from_yaml(filename.localize().c_str());
+    if ptr == nil then
+      halt("failed to load Hamiltonian from " + filename);
+    return new Operator(ptr);
+  }
+
   operator +(const ref a : Operator, const ref b : Operator) {
     return new Operator(ls_hs_operator_plus(a.payload, b.payload));
   }
