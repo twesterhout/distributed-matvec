@@ -1,4 +1,5 @@
 use LatticeSymmetries;
+use Time;
 
 proc localLoadVectors(filename : string, x : string = "/x", y : string = "/y") {
   var input = readDataset(filename, x, real(64), rank = 2)[0, ..];
@@ -24,9 +25,13 @@ proc main() {
   var matrix = loadHamiltonianFromYaml(kHamiltonian);
   matrix.basis.build();
   const (x, y) = localLoadVectors(kVectors);
-
   var z : x.type;
+
+  var timer = new Timer();
+  timer.start();
   localMatVec(matrix, x, z);
+  timer.stop();
+
   const closeEnough = && reduce approxEqual(y, z);
   if (!closeEnough) {
     var maxErrorCount = 10;
@@ -38,6 +43,7 @@ proc main() {
     }
   }
   assert(closeEnough);
+  writeln(timer.elapsed());
 }
 
 proc deinit() {

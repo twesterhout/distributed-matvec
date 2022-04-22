@@ -54,6 +54,12 @@ check-states-enumeration: bin/TestStatesEnumeration data/construction
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_16.yaml --kRepresentatives data/construction/heisenberg_kagome_16.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/old/heisenberg_square_4x4.yaml --kRepresentatives data/construction/heisenberg_square_4x4.h5
 
+.PHONY: benchmark-matrix-vector-product
+benchmark-matrix-vector-product: bin/TestMatrixVectorProduct data/matvec
+	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/heisenberg_pyrochlore_2x2x2.h5
+	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/heisenberg_kagome_36.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_square_6x6.yaml --kVectors data/matvec/heisenberg_square_6x6.h5
+
 .PHONY: check-matrix-vector-product
 check-matrix-vector-product: bin/TestMatrixVectorProduct data/matvec
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_4.yaml --kVectors data/matvec/heisenberg_chain_4.h5
