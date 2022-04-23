@@ -1,5 +1,6 @@
 module BatchedOperator {
 
+use CPtr;
 use FFI;
 use Types;
 
