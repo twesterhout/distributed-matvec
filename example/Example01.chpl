@@ -1,5 +1,6 @@
 use LatticeSymmetries;
 use Time;
+use RangeChunk;
 
 proc bas() {
 }
@@ -78,7 +79,25 @@ proc benchmarkBuild(model : string) {
 
 
 proc main() {
-  ls_hs_init();
+  initRuntime();
+
+  var basis0 = new Basis("{\"number_spins\": 10, \"hamming_weight\": 5}");
+  writeln("Locale[0]: ", basis0.numberSites(), ", ", basis0.isHammingWeightFixed());
+
+  var test : [0 ..# 10] bool;
+  forall t in test {
+    t = basis0.isHammingWeightFixed();
+  }
+
+  var buckets0 = enumerateStates(
+      basis0.minStateEstimate() .. basis0.maxStateEstimate(),
+      5,
+      basis0);
+
+  for k in buckets0.domain {
+    writeln(buckets0[k]);
+  }
+  return 0;
 
   benchmarkBuild(kPhysicalSystem);
 
@@ -137,5 +156,5 @@ proc main() {
 }
 
 proc deinit() {
-  ls_hs_exit();
+  deinitRuntime();
 }

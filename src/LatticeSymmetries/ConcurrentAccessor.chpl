@@ -6,7 +6,7 @@ use ChapelLocks;
 
 config const concurrentAccessorNumLocks = 5 * here.maxTaskPar;
 
-record ConcurrentAccessor {
+class ConcurrentAccessor {
   type eltType;
   var _data : c_ptr(eltType);
   var _numElts : int;
@@ -16,7 +16,7 @@ record ConcurrentAccessor {
 
   proc init(ref arr : [] ?t, numLocks : int = concurrentAccessorNumLocks)
       where !arr.domain.stridable && arr.domain.rank == 1 {
-    this.eltTYpe = t;
+    this.eltType = t;
     this._data = c_ptrTo(arr[arr.domain.low]);
     this._numElts = arr.size;
     this._blockSize = (arr.size + numLocks - 1) / numLocks;

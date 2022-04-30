@@ -63,6 +63,18 @@ module FFI {
   extern proc ls_hs_init();
   extern proc ls_hs_exit();
 
+  proc initRuntime() {
+    coforall loc in Locales do on loc {
+      ls_hs_init();
+    }
+  }
+
+  proc deinitRuntime() {
+    coforall loc in Locales do on loc {
+      ls_hs_exit();
+    }
+  }
+
   extern proc ls_hs_create_basis(particleType : ls_hs_particle_type, numberSites : c_int,
                                  numberParticles : c_int, numberUp : c_int) : c_ptr(ls_hs_basis);
   extern proc ls_hs_clone_basis(basis : c_ptr(ls_hs_basis)) : c_ptr(ls_hs_basis);
@@ -70,10 +82,17 @@ module FFI {
   extern proc ls_hs_min_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
   extern proc ls_hs_max_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
 
+  extern proc ls_hs_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
+  extern proc ls_hs_basis_to_json(basis : c_ptr(ls_hs_basis)) : c_string;
+  extern proc ls_hs_destroy_string(str : c_string);
+
   extern proc ls_hs_create_spin_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
   extern proc ls_hs_create_spin_basis_from_yaml(yaml_filename : c_string) : c_ptr(ls_hs_basis);
   extern proc ls_hs_create_spinful_fermion_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
   extern proc ls_hs_create_spinless_fermion_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
+
+  extern proc ls_hs_fixed_hamming_state_to_index(basis_state : uint(64)) : c_ptrdiff;
+  extern proc ls_hs_fixed_hamming_index_to_state(state_index : c_ptrdiff, hamming_weight : c_int) : uint(64);
 
   extern proc ls_hs_basis_build(basis : c_ptr(ls_hs_basis));
 
