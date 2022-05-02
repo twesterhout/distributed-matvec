@@ -96,6 +96,11 @@ bin/Example01: example/Example01.chpl $(MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 
+bin/dummy: src/dummy.chpl
+	@mkdir -p $(@D)
+	chpl -o $@ $<
+
+
 # Dummy file we use to reproduce internal compiler errors in Chapel for
 # submitting issues.
 .PHONY: error

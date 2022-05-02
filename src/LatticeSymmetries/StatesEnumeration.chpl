@@ -10,6 +10,9 @@ use CPtr;
 use SysCTypes;
 use IO;
 use DynamicIters;
+use CyclicDist;
+use BlockDist;
+use RangeChunk;
 
 /* Get next integer with the same hamming weight.
 
@@ -115,6 +118,203 @@ private inline iter findStatesInRange(in lower: uint(64), upper: uint(64),
     if isHammingWeightFixed { lower = nextState(buffer[written - 1], true); }
     else { lower = nextState(buffer[written - 1], false); }
   }
+}
+
+private inline proc unprojectedStateToIndex(basisState : uint(64), isHammingWeightFixed : bool) : int {
+  return if isHammingWeightFixed then ls_hs_fixed_hamming_state_to_index(basisState)
+                                 else basisState:int;
+}
+private inline proc unprojectedIndexToState(stateIndex : int, hammingWeight : int) : uint(64) {
+  return if hammingWeight != -1 then ls_hs_fixed_hamming_index_to_state(stateIndex, hammingWeight:c_int)
+                                else stateIndex:uint(64);
+}
+
+/* We want to split `r` into `numChunks` non-overlapping ranges but such that for each range
+   `chunk` we have that `popcount(chunk.low) == popcount(chunk.high) == popcount(r.low)` if
+   `isHammingWeightFixed` was set to `true`.
+ */
+proc determineEnumerationRanges(r : range(uint(64)), numChunks : int, isHammingWeightFixed : bool) {
+  const hammingWeight = if isHammingWeightFixed then popcount(r.low):int else -1;
+  const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
+  const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
+  const totalSize = highIdx - lowIdx + 1;
+
+  var ranges = newCyclicArr({0 ..# numChunks}, range(uint(64)));
+  for (r, i) in zip(chunks(lowIdx .. highIdx, numChunks), 0..) {
+    ranges[i] = unprojectedIndexToState(r.low, hammingWeight) .. unprojectedIndexToState(r.high, hammingWeight);
+  }
+  // Chapel's RangeChunk is bu-u-ugy :)
+  // var tempRanges : [0 ..# numChunks] range(int) = ;
+  return ranges;
+}
+
+class Vector {
+  type eltType;
+  var _dom : domain(1);
+  var _arr : [_dom] eltType;
+  var _size : int;
+
+  proc init(type t) {
+    this.eltType = t;
+    this._size = 0;
+  }
+  proc init(arr : [] ?t) {
+    this.eltType = t;
+    this._dom = arr.dom;
+    this._arr = arr;
+    this._size = arr.size;
+  }
+
+  proc reserve(capacity : int) {
+    if capacity > _dom.size then
+      _dom = {0 ..# capacity};
+  }
+
+  inline proc size() { return _size; }
+
+  proc defaultGrow(factor : real = 1.5) {
+    const currentCapacity = _dom.size;
+    const newCapacity = round(factor * currentCapacity):int;
+    reserve(newCapacity);
+  }
+
+  proc pushBack(x : eltType) {
+    if _size == _dom.size then
+      defaultGrow();
+    _arr[_size] = x;
+    _size += 1;
+  }
+
+  proc append(xs : [] eltType) {
+    if _size + xs.size > _dom.size then
+      reserve(_size + xs.size);
+    _arr[_size ..# xs.size] = xs;
+    _size += xs.size;
+  }
+  proc append(const ref xs : Vector(eltType)) {
+    append(xs._arr[0 ..# xs._size]);
+  }
+
+  // inline proc toArray() ref { return _arr[0 ..# _size]; }
+}
+
+/* Hash function which we use to map spin configurations to locale indices.
+
+   Typical usage:
+   ```chapel
+   var localeIndex = (hash64_01(x) % numLocales:uint):int;
+   ```
+*/
+private inline proc hash64_01(in x: uint(64)): uint(64) {
+  x = (x ^ (x >> 30)) * (0xbf58476d1ce4e5b9:uint(64));
+  x = (x ^ (x >> 27)) * (0x94d049bb133111eb:uint(64));
+  x = x ^ (x >> 31);
+  return x;
+}
+
+inline proc localeIdxOf(basisState : uint(64)) : int {
+  return (hash64_01(basisState) % numLocales:uint):int;
+}
+
+private proc _enumerateStatesUnprojected(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
+  const isHammingWeightFixed = basis.isHammingWeightFixed();
+  if isHammingWeightFixed then
+    assert(popcount(r.low) == popcount(r.high));
+  const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
+  const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
+  const totalCount = highIdx - lowIdx + 1;
+
+  const estimatedCountPerLocale = totalCount / numLocales;
+  foreach i in LocaleSpace do
+    outVectors[i].reserve(estimatedCountPerLocale);
+
+  var v = r.low;
+  for i in 0 ..# totalCount {
+    const localeIdx = localeIdxOf(v);
+    outVectors[localeIdx].pushBack(v);
+    v = if isHammingWeightFixed
+          then nextStateFixedHamming(v)
+          else nextStateGeneral(v);
+  }
+}
+private proc _enumerateStatesSpinfulFermion(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
+  assert(basis.isSpinfulFermionicBasis());
+  const numberSites = basis.numberSites();
+  const mask = (1 << numberSites) - 1; // isolate the lower numberSites bits
+  const numberUp = basis.numberUp();
+  const numberDown = basis.numberParticles() - numberUp;
+  const countA =
+    unprojectedStateToIndex(r.high & mask, isHammingWeightFixed=true) -
+      unprojectedStateToIndex(r.low & mask, isHammingWeightFixed=true) + 1;
+  const countB =
+    unprojectedStateToIndex((r.high >> numberSites) & mask, isHammingWeightFixed=true) -
+      unprojectedStateToIndex((r.low >> numberSites) & mask, isHammingWeightFixed=true) + 1;
+  const estimatedCountPerLocale = countA * countB / numLocales;
+  foreach i in LocaleSpace do
+    outVectors[i].reserve(estimatedCountPerLocale);
+
+  var vB = (r.low >> numberSites) & mask;
+  for _iB in 0 ..# countB {
+    var vA = r.low & mask;
+    for _iA in 0 ..# countA {
+      const v = (vB << numberSites) | vA;
+      const localeIdx = localeIdxOf(v);
+      outVectors[localeIdx].pushBack(v);
+
+      vA = nextStateFixedHamming(vA);
+    }
+    vB = nextStateFixedHamming(vB);
+  }
+}
+private proc _enumerateStatesProjected(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
+  const isHammingWeightFixed = basis.isHammingWeightFixed();
+  for v in findStatesInRange(r.low, r.high, isHammingWeightFixed, basis) {
+    const localeIdx = localeIdxOf(v);
+    outVectors[localeIdx].pushBack(v);
+  }
+}
+private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
+  logDebug("_enumerateStates");
+  if basis.requiresProjection() {
+    _enumerateStatesProjected(r, basis, outVectors);
+  }
+  else if basis.isStateIndexIdentity() || basis.isHammingWeightFixed() {
+    _enumerateStatesUnprojected(r, basis, outVectors);
+  }
+  else {
+    _enumerateStatesSpinfulFermion(r, basis, outVectors);
+  }
+}
+
+proc _emptyVectors(type t) : [LocaleSpace] shared Vector(t)
+  { return [loc in LocaleSpace] new shared Vector(t); }
+
+proc enumerateStates(globalRange : range(uint(64)), numChunks : int, const ref basis : Basis) {
+  logDebug("enumerateStates");
+  const isHammingWeightFixed = basis.isHammingWeightFixed();
+  const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
+  const D = {0 ..# numChunks} dmapped Cyclic(startIdx=0);
+  var buckets: [D] [LocaleSpace] shared Vector(uint(64)) = [d in D] _emptyVectors(uint(64));
+  // noinit;
+  // new Vector(uint(64));
+ 
+  forall (r, i) in zip(ranges, 0..) {
+    assert(here == buckets[i].locale);
+    const localBasis = basis;
+    _enumerateStates(r, localBasis, buckets[i]);
+  }
+
+  const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
+  var representatives : [OnePerLocale] shared Vector(uint(64)) =
+    [loc in OnePerLocale] new shared Vector(uint(64));
+  forall (vector, localeIdx) in zip(representatives, LocaleSpace) {
+    vector.reserve(+ reduce [bucket in buckets] bucket[localeIdx].size());
+    for bucket in buckets {
+      const ref v = bucket[localeIdx];
+      vector.append(v);
+    }
+  }
+  return representatives;
 }
 
 config const enumerateStatesWithProjectionNumChunks : int = 10 * here.maxTaskPar;

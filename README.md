@@ -1,102 +1,267 @@
-## Obtaining dependencies
+# distributed-matvec
 
-### Using pre-built libraries
+This repository contains Chapel implementation of a few key algorithms for
+lattice-symmetries package.
 
-In the project root run the following:
 
-```sh
-wget https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.1-pre/third_party.tar.bz2
-tar -xf third_party.tar.bz2
+## Obtaining the dependencies
+
+[`lattice-symmetries-haskell`](https://github.com/twesterhout/lattice-symmetries-haskell)
+is a required dependency. You can either compile it from source (not recommended
+unless you plan to contribute patches) or download a pre-built version:
+
+```bash
+LS_HS_VERSION=abe34c4
+# On Linux
+wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/continuous/lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
+tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
+# On OS X
+# wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/continuous/lattice-symmetries-haskell-${LS_HS_VERSION}-macos-latest.tar.bz2
+# tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-macos-latest.tar.bz2
+mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
 ```
 
-Shared libraries in `third_party/lib` depend on the following system libraries:
-
-  * libc (GLIBC >= 2.12)
-  * libgomp (GOMP >= 4.5)
-  * libnuma
-  * libz
-  * libutil *(you probably already have it)*
-  * libm *(you probably already have it)*
-  * libdl *(you probably already have it)*
-
-### Building from source
-
-Alternatively, you can generate `third_party.tar.bz2` manually. For this you will need [Singularity](https://sylabs.io/).
-
-1) Download GHC and HDF5 from the releases.
-
-   ~~~~~~~~sh
-   mkdir pre
-   cd pre/
-   wget https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.0/ghc-8.10.7-x86_64-linux-ubuntu-18.04-2021-12-16.tar.xz
-   wget https://github.com/twesterhout/distributed-matvec/releases/download/v0.0.0/hdf5-1.12.1.tar.bz2
-   ~~~~~~~~
-   (SHA256 checksums for the binaries are available on the [Releases](https://github.com/twesterhout/distributed-matvec/releases) page)
-
-   Source distribution of HDF5 can alternatively be downloaded from the [official website](https://www.hdfgroup.org/downloads/hdf5/source-code/).
-
-   Generating the bindist of GHC yourself is more tricky. We will be compiling Haskell into a standalone shared library and hence need GHC RTS compiled with `-fPIC`. This requires building GHC from source. So just stick to the pre-compiled GHC distributed with this repo :wink:
-
-2) Build the containers. It might take a while.
-
-   ~~~~~~~~sh
-   make dependencies
-   ~~~~~~~~
+See also the [Github Actions workflow](.github/workflows/ci.yml) for up-to-date
+installation instructions (for instance, the latest tested `LS_HS_VERSION`).
 
 
 ## Building
 
 Use the [Makefile](Makefile) in this repository to build the code:
 
-```sh
+```bash
 make
 ```
 
+This assumes that you haven an existing installation of
+[Chapel](https://chapel-lang.org/).
 
-## Running
 
-To run the code you will also need input files. They can be obtained from
-[here](https://surfdrive.surf.nl/files/index.php/s/OK5527Awfgl1hT2).
+## Testing
 
-Place all HDF5 files from `data/matvec` into `data/matvec` in this repository.
-Files correspond to a few physical systems of different sizes.
+To run tests, type
 
-As a small test, try running the following from the project's root folder:
-
-```sh
-./test_matvec -nl1
+```bash
+make check
 ```
 
-this will run matrix-vector product on a 10-spin chain which has a dimension of
-13. I.e. you are multiplying a 13x13 matrix by a vector.
+This will automatically download some HDF5 input files which are required to run
+the tests.
 
-If you want to run a larger test, try the 5x5 square. Matrix dimension is now
-5200300.
 
-```sh
-./test_matvec -nl4 \
-  --kInputBasisPath data/heisenberg_square_5x5.yaml \
-  --kInputDataPath data/matvec/heisenberg_square_5x5.h5 \
-  --kBatchSize 10000 \
-  --kProfilingThreads=false
+## Benchmarking
+
+There are some benchmarks which you can run using
+
+```bash
+make benchmark-states-enumeration
+make benchmark-matrix-vector-product
 ```
 
-For comparison, `liblattice_symmetries.so` (which is written in (mostly) C++ and
-uses OpenMP for parallelism takes about 0.2 seconds on a 64-core Epyc to perform
-such a matrix-vector).
+Timings should be compared with the plots from the
+[`lattice-symmetries`](https://github.com/twesterhout/lattice-symmetries#bicyclist-performance)
+repo.
 
-Finally, you could also try running the 6x6 square although with the current
-version of the code it takes way too long:
+Please, note, that running benchmarks requires some extra HDF5 input files which
+will use 1-2GB of storage.
 
-```sh
-./test_matvec -nl4 \
-  --kInputBasisPath data/heisenberg_square_6x6.yaml \
-  --kInputDataPath data/matvec/heisenberg_square_6x6.h5 \
-  --kBatchSize 10000 \
-  --kProfilingThreads=false
+
+## Remarks on matrix-vector product
+
+We want to compute `y ← H⋅x`, where `y` and `x` are distributed vectors and `H`
+is an operator. `H` is never stored and is given to us in a matrix-free form.
+
+> **A remark on notation:** in quantum mechanics it is common to use so called
+> Dirac notation for vectors. So we would write |ψ⟩ when we mean that ψ is a
+> vector in some (high-dimensional) vector space. In the following, I will use
+> |σ⟩ do denote basis vectors of our space to avoid confusion between basis
+> vectors and indices, i.e. `i` is an index (internally, an `int`) and `|σᵢ⟩` is
+> the `i`'th basis vector (internally, an `uint(64)`).
+
+Having `H` in matrix-free form means that we can efficiently compute `H|σᵢ⟩ = ∑ⱼ
+cⱼ|σⱼ⟩` where `|σᵢ⟩` is a basis vector (internally represented by a bitstring,
+i.e. `uint(64)`). Coefficients `cⱼ` are complex numbers `complex(128)`.
+What's important to note is that we only have access to `|σⱼ⟩` rather than `j`
+itself. The index `j` needs to be explicitly computed.
+
+A simple implementation of our matrix-vector product could look like this:
+
+```chapel
+proc matrixVectorProduct(H, const ref x, ref y, const ref representatives) {
+  y = 0; // initialize y with zeros
+  for i in 0 ..# x.size {
+    // representatives is a distributed vector of basis states. It is pre-computed
+    const |σᵢ⟩ = representatives[i];
+    for (cⱼ, |σⱼ⟩) in H|σᵢ⟩ {
+      const t = x[i] * cⱼ;
+      const j = indexOf(|σⱼ⟩);
+      y[j] += t;
+    }
+  }
+}
 ```
 
-(C++ + OpenMP performs this in about 12.8 seconds on a 64-core Epyc)
+The non-trivial part is how to distribute `x`, `y`, and `representatives` among
+locales. The simplest approach would be to use block-distributed vectors.
+However, there are multiple drawbacks with this approach:
 
-There is also `heisenberg_kagome_16` which is somewhere between
-`heisenberg_chain_10` and `heisenberg_square_5x5` and is quite good for testing.
+  * Non-uniform work distribution. The number of non-zero elements per row of
+  `H` varies significantly, and if some locale only has access to the first few
+  elements of `representatives` it's highly that it will have much less work to
+  do than other locales.
+  * ~Figuring out on which locale a particular element `|σⱼ⟩` resides, scales as
+  `O(log numLocales)` which is non-optimal especially because the number of
+  `|σⱼ⟩` that we have to process, is extremely big (think, 10¹⁰-10¹¹).~ This was
+  wrong, the operation can actually be done in constant time if the size of
+  blocks is the same across locales.
+
+> **Note:** I'm now thinking that having a block-cyclic distribution might do
+> the trick... However, the below discussion is easily transferable to the case
+> when block-cyclic distribution is used instead of hashing.
+
+We will take an alternative approach and use a simple hash function to map
+states `|σ⟩` to locales:
+
+```chapel
+proc localeOf(basisState : uint(64)) : int {
+  return (hash(basisState) % numLocales:uint):int;
+}
+
+// An example hash function
+inline proc hash(in x: uint(64)): uint(64) {
+  x = (x ^ (x >> 30)) * (0xbf58476d1ce4e5b9:uint(64));
+  x = (x ^ (x >> 27)) * (0x94d049bb133111eb:uint(64));
+  x = x ^ (x >> 31);
+  return x;
+}
+```
+
+Unfortunately, such a distribution of states means that, unless we want to write
+a custom distribution class, we have to manually manage all accesses to parts of
+`x`, `y`, and `representatives` which reside on other locales.
+
+Our `indexOf` function now looks more or less like this:
+
+```chapel
+proc indexOf(basisState : uint(64)) : int {
+  const targetLocale = localeOf(basisState);
+  var index : int;
+  on Locales[targetLocale] {
+    index = localIndexOf(basisState);
+  }
+  return index;
+}
+```
+
+This is, of course, terribly inefficient because for each `|σⱼ⟩` we make a
+remote procedure call (which cannot be optimized because of the `localIndexOf`
+call).
+
+Instead, we can rewrite the inner loop of our algorithm as follows:
+
+```chapel
+for (cⱼ, |σⱼ⟩) in H|σᵢ⟩ {
+  const t = x[i] * cⱼ;
+  const targetLocale = localeOf(|σⱼ⟩);
+  on targetLocale {
+    // copy stuff to targetLocale
+    const t' = t;
+    const |σⱼ⟩' = |σⱼ⟩;
+    // everything else is done locally
+    const j = localIndexOf(|σⱼ⟩');
+    y.localAccess(j) += t';
+  }
+}
+```
+
+This is an improvement, because we now go from `here` to `targetLocale`, but
+never have to communicate anything back. However, we still have the problem that
+a new task is spawned for each `|σⱼ⟩`. Obvious solution is to batch together
+many `|σⱼ⟩`s and then process them all at once:
+
+```chapel
+for (cⱼ, |σⱼ⟩) in H|σᵢ⟩ {
+  const t = x[i] * cⱼ;
+  const targetLocale = localeOf(|σⱼ⟩);
+  magic.enqueue(targetLocale, |σⱼ⟩, t);
+}
+```
+
+Here, `magic` record has a buffer for each `targetLocale` which it fills up.
+When the buffer is full, `magic` will spawn a task on `targetLocale` to process
+it:
+
+```chapel
+proc process(targetLocale : locale, buffer : [] (uint(64), complex(128))) {
+  on targetLocale {
+    const localBuffer = buffer;
+    for (t, |σⱼ⟩) in localBuffer {
+      const j = localIndexOf(|σⱼ⟩);
+      y.localAccess(j) += t;
+    }
+  }
+}
+```
+
+There is a problem with the above approach, though, which is that we have a race
+condition: multiple tasks might try to perform `y.localAccess(j) += t` in
+parallel. If `y.eltType` was an integral type, we could have used atomic
+operations, but since `y.eltType` is `real` or `complex`, we need some kind of
+locking mechanism. The simplest is to protect `y` with a mutex or a spinlock,
+but that does not scale to many cores. Instead, we can have an array of locks
+protecting parts of `y`. Then, since accesses to `y` are pretty random, there is
+hope that different tasks will access different parts of `y` and won't have to
+wait:
+
+```chapel
+record ConcurrentAccessor {
+  type eltType;
+  var _data : c_ptr(eltType);
+  var _numElts : int;
+  var _blockSize : int;
+  var numLocks : int;
+  var _locks : [0 ..# numLocks] chpl_LocalSpinlock;
+
+  proc init(ref arr : [] ?t, numLocks : int = concurrentAccessorNumLocks)
+      where !arr.domain.stridable && arr.domain.rank == 1 {
+    this.eltTYpe = t;
+    this._data = c_ptrTo(arr[arr.domain.low]);
+    this._numElts = arr.size;
+    this._blockSize = (arr.size + numLocks - 1) / numLocks;
+    this.numLocks = numLocks;
+    assert(_blockSize * numLocks >= _numElts);
+  }
+
+  inline proc _blockIdx(i : int) : int {
+    return i / _blockSize;
+  }
+
+  inline proc localAdd(i : int, x : eltType) {
+    const blockIdx = _blockIdx(i);
+    ref lock = _locks[blockIdx];
+    lock.lock();
+    _data[i] += x;
+    lock.unlock();
+  }
+}
+```
+
+Now, instead of doing `y.localAccess(i) += t` we can do
+
+```
+const yAccessor = new ConcurrentAccessor(y);
+...
+yAccessor.localAdd(i, t); // similar to y[i] += t, but thread-safe
+```
+
+
+
+
+
+
+
+
+
+
+
+

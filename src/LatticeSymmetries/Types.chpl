@@ -9,13 +9,42 @@ module Types {
     var owning : bool;
 
     proc init(p : c_ptr(ls_hs_basis), owning : bool = true) {
+      logDebug("Basis(c_ptr(ls_hs_basis), bool)");
+      assert(here == p.locale);
       this.payload = p;
       this.owning = owning;
     }
-    proc init=(const ref from : Basis) {
-      assert(here == from.locale);
-      this.payload = ls_hs_clone_basis(from.payload);
+    proc init(json_string : string) {
+      logDebug("ls_hs_basis_from_json");
+      this.payload = ls_hs_basis_from_json(json_string.localize().c_str());
       this.owning = true;
+    }
+    proc init=(const ref from : Basis) {
+      if here == from.locale {
+        logDebug("ls_hs_clone_basis");
+        this.payload = ls_hs_clone_basis(from.payload);
+        this.owning = true;
+      }
+      else {
+        var json_string : string;
+        on from.locale {
+          const s = from.toJSON();
+          json_string = s;
+        }
+        logDebug("ls_hs_basis_from_json");
+        this.payload = ls_hs_basis_from_json(json_string.c_str());
+        this.owning = true;
+      }
+    }
+
+    proc toJSON() : string {
+      logDebug("ls_hs_basis_to_json");
+      const c_str = ls_hs_basis_to_json(payload);
+      defer {
+        logDebug("ls_hs_destroy_string");
+        ls_hs_destroy_string(c_str);
+      }
+      return c_str:string;
     }
 
     proc _destroy() {
@@ -34,14 +63,23 @@ module Types {
     proc isSpinlessFermionicBasis() { return payload.deref().particle_type == LS_HS_SPINLESS_FERMION; }
     proc isStateIndexIdentity() { return payload.deref().state_index_is_identity; }
     proc requiresProjection() { return payload.deref().requires_projection; }
-    proc isHammingWeightFixed() { return ls_hs_basis_has_fixed_hamming_weight(payload); }
+    proc isHammingWeightFixed() {
+      logDebug("ls_hs_basis_has_fixed_hamming_weight");
+      return ls_hs_basis_has_fixed_hamming_weight(payload);
+    }
 
     proc numberSites() : int { return payload.deref().number_sites; }
     proc numberParticles() : int { return payload.deref().number_particles; }
     proc numberUp() : int { return payload.deref().number_up; }
 
-    proc minStateEstimate() : uint(64) { return ls_hs_min_state_estimate(payload); }
-    proc maxStateEstimate() : uint(64) { return ls_hs_max_state_estimate(payload); }
+    proc minStateEstimate() : uint(64) {
+      logDebug("ls_hs_min_state_estimate");
+      return ls_hs_min_state_estimate(payload);
+    }
+    proc maxStateEstimate() : uint(64) {
+      logDebug("ls_hs_max_state_estimate");
+      return ls_hs_max_state_estimate(payload);
+    }
 
     proc representatives() {
       ref rs = payload.deref().representatives;

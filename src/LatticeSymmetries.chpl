@@ -4,6 +4,8 @@ module LatticeSymmetries {
   public use Types;
   public use StatesEnumeration;
   public use MatrixVectorProduct;
+  public use ConcurrentAccessor;
+  public use CommunicationQueue;
   // use CTypes;
   // use CPtr;
   // use SysCTypes;
