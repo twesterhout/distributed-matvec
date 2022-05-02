@@ -1,5 +1,6 @@
 module StatesEnumeration {
 
+use ChplConfig;
 use Types;
 use FFI;
 
@@ -58,6 +59,7 @@ private proc manyNextState(v: uint(64), bound: uint(64), buffer: [] uint(64),
     else return manyNextStateImpl(v, bound, buffer, false);
 }
 
+/*
 private inline proc testBit(bits: uint(64), i: int): bool { return ((bits >> i) & 1):bool; }
 private inline proc clearBit(bits: uint(64), i: int) { return bits & ~(1:uint(64) << i); }
 private inline proc setBit(bits: uint(64), i: int) { return bits | (1:uint(64) << i); }
@@ -96,6 +98,7 @@ private inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint)
   }
   return x;
 }
+*/
 
 config const isRepresentativeBatchSize : int = 65536;
 
@@ -141,10 +144,9 @@ proc determineEnumerationRanges(r : range(uint(64)), numChunks : int, isHammingW
 
   var ranges = newCyclicArr({0 ..# numChunks}, range(uint(64)));
   for (r, i) in zip(chunks(lowIdx .. highIdx, numChunks), 0..) {
-    ranges[i] = unprojectedIndexToState(r.low, hammingWeight) .. unprojectedIndexToState(r.high, hammingWeight);
+    ranges[i] = unprojectedIndexToState(r.low, hammingWeight)
+                  .. unprojectedIndexToState(r.high, hammingWeight);
   }
-  // Chapel's RangeChunk is bu-u-ugy :)
-  // var tempRanges : [0 ..# numChunks] range(int) = ;
   return ranges;
 }
 
@@ -195,6 +197,10 @@ class Vector {
     append(xs._arr[0 ..# xs._size]);
   }
 
+  proc shrink() {
+    if _size < _dom.size then
+      _dom = {0 ..# _size};
+  }
   // inline proc toArray() ref { return _arr[0 ..# _size]; }
 }
 
@@ -212,7 +218,12 @@ private inline proc hash64_01(in x: uint(64)): uint(64) {
   return x;
 }
 
-inline proc localeIdxOf(basisState : uint(64)) : int {
+inline proc localeIdxOf(basisState : uint(64)) : int 
+    where CHPL_COMM == "" {
+  return 0;
+}
+inline proc localeIdxOf(basisState : uint(64)) : int 
+    where CHPL_COMM != "" {
   return (hash64_01(basisState) % numLocales:uint):int;
 }
 
@@ -289,7 +300,9 @@ private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis, ref 
 proc _emptyVectors(type t) : [LocaleSpace] shared Vector(t)
   { return [loc in LocaleSpace] new shared Vector(t); }
 
-proc enumerateStates(globalRange : range(uint(64)), numChunks : int, const ref basis : Basis) {
+config const enumerateStatesNumChunks : int = 10 * numLocales * here.maxTaskPar;
+
+proc enumerateStates(const ref basis : Basis, numChunks : int, globalRange : range(uint(64))) {
   logDebug("enumerateStates");
   const isHammingWeightFixed = basis.isHammingWeightFixed();
   const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
@@ -316,9 +329,15 @@ proc enumerateStates(globalRange : range(uint(64)), numChunks : int, const ref b
   }
   return representatives;
 }
+proc enumerateStates(const ref basis : Basis, numChunks : int = enumerateStatesNumChunks) {
+  const lower = basis.minStateEstimate();
+  const upper = basis.maxStateEstimate();
+  return enumerateStates(basis, numChunks, lower .. upper);
+}
 
-config const enumerateStatesWithProjectionNumChunks : int = 10 * here.maxTaskPar;
+// config const enumerateStatesWithProjectionNumChunks : int = 10 * here.maxTaskPar;
 
+/*
 /* We want to split `r` into `numChunks` non-overlapping ranges but such that for each range
    `chunk` we have that `popcount(chunk.low) == popcount(chunk.high) == popcount(r.low)` if
    `isHammingWeightFixed` was set to `true`.
@@ -358,8 +377,9 @@ iter _customChunks(r : range(uint(64)), numChunks : int, isHammingWeightFixed : 
              else yield b .. e;
   }
 }
+*/
 
-
+/*
 private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64),
                                            const ref basis : Basis) {
   logDebug("Calling enumerateStatesWithProjection lower=" + lower:string +
@@ -392,7 +412,9 @@ private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64),
   assert(offset == count);
   return rs;
 }
+*/
 
+/*
 private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64),
                                          const ref basis : Basis) {
   logDebug("Calling enumerateStatesFixedHamming lower=" + lower:string +
@@ -416,7 +438,9 @@ private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64),
   }
   return rs;
 }
+*/
 
+/*
 proc localEnumerateRepresentatives(const ref basis : Basis,
                                    lower : uint(64) = basis.minStateEstimate(),
                                    upper : uint(64) = basis.maxStateEstimate()) {
@@ -455,6 +479,7 @@ proc localEnumerateRepresentatives(const ref basis : Basis,
   }
   return rs;
 }
+*/
 
 // proc _generateBucketRanges() {
 //   coforall loc in Locales do on loc {
@@ -494,8 +519,11 @@ export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
                                               upper : uint(64),
                                               dest : c_ptr(chpl_external_array)) {
   const basis = new Basis(p, owning=false);
-  var rs = localEnumerateRepresentatives(basis, lower, upper);
-  dest.deref() = convertToExternalArray(rs);
+  // var rs = localEnumerateRepresentatives(basis, lower, upper);
+  var rs = enumerateStates(basis);
+  ref v = rs[here.id];
+  v.shrink();
+  dest.deref() = convertToExternalArray(v._arr);
 }
 
 proc initExportedKernels() {

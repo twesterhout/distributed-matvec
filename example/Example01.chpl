@@ -89,10 +89,7 @@ proc main() {
     t = basis0.isHammingWeightFixed();
   }
 
-  var buckets0 = enumerateStates(
-      basis0.minStateEstimate() .. basis0.maxStateEstimate(),
-      5,
-      basis0);
+  var buckets0 = enumerateStates(basis0, 5);
 
   for k in buckets0.domain {
     writeln(buckets0[k]);
