@@ -42,10 +42,10 @@ test: bin/TestStatesEnumeration bin/TestMatrixVectorProduct
 check: check-states-enumeration check-matrix-vector-product
 
 .PHONY: benchmark-states-enumeration
-benchmark-states-enumeration: bin/TestStatesEnumeration data/construction
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/heisenberg_pyrochlore_2x2x2.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/heisenberg_kagome_36.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_square_6x6.yaml --kRepresentatives data/construction/heisenberg_square_6x6.h5
+benchmark-states-enumeration: bin/TestStatesEnumeration data/large-scale
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/large-scale/construction/heisenberg_pyrochlore_2x2x2.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/large-scale/construction/heisenberg_kagome_36.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_square_6x6.yaml --kRepresentatives data/large-scale/construction/heisenberg_square_6x6.h5
 
 .PHONY: check-states-enumeration
 check-states-enumeration: bin/TestStatesEnumeration data/construction
@@ -55,10 +55,10 @@ check-states-enumeration: bin/TestStatesEnumeration data/construction
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/old/heisenberg_square_4x4.yaml --kRepresentatives data/construction/heisenberg_square_4x4.h5
 
 .PHONY: benchmark-matrix-vector-product
-benchmark-matrix-vector-product: bin/TestMatrixVectorProduct data/matvec
+benchmark-matrix-vector-product: bin/TestMatrixVectorProduct data/large-scale
 	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/heisenberg_pyrochlore_2x2x2.h5
 	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/heisenberg_kagome_36.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_square_6x6.yaml --kVectors data/matvec/heisenberg_square_6x6.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_square_6x6.yaml --kVectors data/large-scale/matvec/heisenberg_square_6x6.h5
 
 .PHONY: check-matrix-vector-product
 check-matrix-vector-product: bin/TestMatrixVectorProduct data/matvec
@@ -77,6 +77,11 @@ data/construction:
 data/matvec:
 	mkdir -p data && cd data && \
 	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Fmatvec && \
+	unzip tmp.zip && rm tmp.zip
+
+data/large-scale:
+	mkdir -p data && cd data && \
+	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Flarge-scale && \
 	unzip tmp.zip && rm tmp.zip
 
 bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(MODULES)
