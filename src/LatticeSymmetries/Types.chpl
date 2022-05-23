@@ -1,7 +1,5 @@
 module Types {
-  // use CTypes;
-  use CPtr;
-  use SysCTypes;
+  use CTypes;
   use FFI;
 
   record Basis {
@@ -64,7 +62,7 @@ module Types {
     proc isStateIndexIdentity() { return payload.deref().state_index_is_identity; }
     proc requiresProjection() { return payload.deref().requires_projection; }
     proc isHammingWeightFixed() {
-      logDebug("ls_hs_basis_has_fixed_hamming_weight");
+      // logDebug("ls_hs_basis_has_fixed_hamming_weight");
       return ls_hs_basis_has_fixed_hamming_weight(payload);
     }
 
@@ -73,11 +71,11 @@ module Types {
     proc numberUp() : int { return payload.deref().number_up; }
 
     proc minStateEstimate() : uint(64) {
-      logDebug("ls_hs_min_state_estimate");
+      // logDebug("ls_hs_min_state_estimate");
       return ls_hs_min_state_estimate(payload);
     }
     proc maxStateEstimate() : uint(64) {
-      logDebug("ls_hs_max_state_estimate");
+      // logDebug("ls_hs_max_state_estimate");
       return ls_hs_max_state_estimate(payload);
     }
 
@@ -153,7 +151,7 @@ module Types {
     return (areRepresentatives, norms);
   }
 
-  class Operator {
+  record Operator {
     var payload : c_ptr(ls_hs_operator);
     var basis : Basis;
     var owning : bool;
@@ -171,6 +169,12 @@ module Types {
     proc init(raw : c_ptr(ls_hs_operator), owning : bool = true) {
       this.payload = raw;
       this.basis = new Basis(this.payload.deref().basis, owning=false);
+    }
+    proc init=(const ref from : Operator) {
+      halt("Operator.init= is not yet implemented");
+      this.payload = nil;
+      this.basis = new Basis(nil, owning=false);
+      this.owning = false;
     }
     proc deinit() {
       if owning then

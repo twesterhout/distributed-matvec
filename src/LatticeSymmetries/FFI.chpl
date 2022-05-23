@@ -1,7 +1,5 @@
 module FFI {
-  // use CTypes;
-  use CPtr;
-  use SysCTypes;
+  use CTypes;
   use IO;
 
   pragma "no doc"

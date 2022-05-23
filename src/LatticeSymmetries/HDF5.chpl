@@ -1,7 +1,5 @@
 module HDF5 {
-  // use CTypes;
-  use CPtr;
-  use SysCTypes;
+  use CTypes;
 
   use LatticeSymmetries.FFI;
 

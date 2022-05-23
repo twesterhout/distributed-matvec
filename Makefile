@@ -19,6 +19,9 @@ MODULES = src/LatticeSymmetries.chpl \
 	  src/LatticeSymmetries/HDF5.chpl \
 	  src/LatticeSymmetries/Types.chpl \
 	  src/LatticeSymmetries/StatesEnumeration.chpl \
+	  src/LatticeSymmetries/ConcurrentAccessor.chpl \
+	  src/LatticeSymmetries/BatchedOperator.chpl \
+	  src/LatticeSymmetries/DistributedMatrixVector.chpl \
 	  src/LatticeSymmetries/helper.c
 
 .PHONY: all

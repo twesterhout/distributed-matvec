@@ -6,9 +6,7 @@ use FFI;
 
 use BitOps;
 use List;
-// use CTypes;
-use CPtr;
-use SysCTypes;
+use CTypes;
 use IO;
 use DynamicIters;
 use CyclicDist;
@@ -136,12 +134,14 @@ private inline proc unprojectedIndexToState(stateIndex : int, hammingWeight : in
    `chunk` we have that `popcount(chunk.low) == popcount(chunk.high) == popcount(r.low)` if
    `isHammingWeightFixed` was set to `true`.
  */
-proc determineEnumerationRanges(r : range(uint(64)), numChunks : int, isHammingWeightFixed : bool) {
+proc determineEnumerationRanges(r : range(uint(64)), in numChunks : int,
+                                isHammingWeightFixed : bool) {
   const hammingWeight = if isHammingWeightFixed then popcount(r.low):int else -1;
   const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
   const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
   const totalSize = highIdx - lowIdx + 1;
-
+  if numChunks > totalSize then
+    numChunks = totalSize;
   var ranges = newCyclicArr({0 ..# numChunks}, range(uint(64)));
   for (r, i) in zip(chunks(lowIdx .. highIdx, numChunks), 0..) {
     ranges[i] = unprojectedIndexToState(r.low, hammingWeight)
@@ -176,7 +176,8 @@ class Vector {
 
   proc defaultGrow(factor : real = 1.5) {
     const currentCapacity = _dom.size;
-    const newCapacity = round(factor * currentCapacity):int;
+    const newCapacity =
+      max(currentCapacity + 1, round(factor * currentCapacity):int);
     reserve(newCapacity);
   }
 
@@ -229,8 +230,10 @@ inline proc localeIdxOf(basisState : uint(64)) : int
 
 private proc _enumerateStatesUnprojected(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
   const isHammingWeightFixed = basis.isHammingWeightFixed();
-  if isHammingWeightFixed then
-    assert(popcount(r.low) == popcount(r.high));
+  if isHammingWeightFixed && popcount(r.low) != popcount(r.high) then
+    halt("r.low=" + r.low:string + " and r.high=" + r.high:string
+        + " have different Hamming weight: " + popcount(r.low):string
+        + " vs. " + popcount(r.high):string);
   const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
   const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
   const totalCount = highIdx - lowIdx + 1;
@@ -285,7 +288,7 @@ private proc _enumerateStatesProjected(r : range(uint(64)), const ref basis : Ba
   }
 }
 private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
-  logDebug("_enumerateStates");
+  // logDebug("_enumerateStates");
   if basis.requiresProjection() {
     _enumerateStatesProjected(r, basis, outVectors);
   }
@@ -302,19 +305,21 @@ proc _emptyVectors(type t) : [LocaleSpace] shared Vector(t)
 
 config const enumerateStatesNumChunks : int = 10 * numLocales * here.maxTaskPar;
 
-proc enumerateStates(const ref basis : Basis, numChunks : int, globalRange : range(uint(64))) {
-  logDebug("enumerateStates");
+proc enumerateStates(const ref basis : Basis, in numChunks : int, globalRange : range(uint(64))) {
+  // logDebug("enumerateStates");
   const isHammingWeightFixed = basis.isHammingWeightFixed();
   const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
+  assert(ranges.size <= numChunks);
+  numChunks = ranges.size; // We could have fewer elements in the range than numChunks.
+                           // In such case, we limit numChunks
   const D = {0 ..# numChunks} dmapped Cyclic(startIdx=0);
   var buckets: [D] [LocaleSpace] shared Vector(uint(64)) = [d in D] _emptyVectors(uint(64));
   // noinit;
   // new Vector(uint(64));
  
-  forall (r, i) in zip(ranges, 0..) {
+  forall (r, i) in zip(ranges, 0..) with (in basis) {
     assert(here == buckets[i].locale);
-    const localBasis = basis;
-    _enumerateStates(r, localBasis, buckets[i]);
+    _enumerateStates(r, basis, buckets[i]);
   }
 
   const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
