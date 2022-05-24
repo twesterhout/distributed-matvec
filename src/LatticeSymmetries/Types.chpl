@@ -19,7 +19,7 @@ module Types {
     }
     proc init=(const ref from : Basis) {
       if here == from.locale {
-        logDebug("ls_hs_clone_basis");
+        logDebug(here:string + ": ls_hs_clone_basis(" + from.payload:string + ")");
         this.payload = ls_hs_clone_basis(from.payload);
         this.owning = true;
       }

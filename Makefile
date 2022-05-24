@@ -22,6 +22,7 @@ MODULES = src/LatticeSymmetries.chpl \
 	  src/LatticeSymmetries/ConcurrentAccessor.chpl \
 	  src/LatticeSymmetries/BatchedOperator.chpl \
 	  src/LatticeSymmetries/DistributedMatrixVector.chpl \
+	  src/LatticeSymmetries/MultiwayMerge.chpl \
 	  src/LatticeSymmetries/helper.c
 
 .PHONY: all
@@ -91,6 +92,10 @@ bin/TestMatrixVectorProduct: test/TestMatrixVectorProduct.chpl $(MODULES)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 
 bin/Example01: example/Example01.chpl $(MODULES)
+	@mkdir -p $(@D)
+	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+
+bin/Example03: example/Example03.chpl $(MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 

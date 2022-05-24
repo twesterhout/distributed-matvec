@@ -6,6 +6,9 @@ module LatticeSymmetries {
   public use MatrixVectorProduct;
   public use ConcurrentAccessor;
   public use CommunicationQueue;
+  public use MultiwayMerge;
+
+  initExportedKernels();
   // use CTypes;
   // use CPtr;
   // use SysCTypes;

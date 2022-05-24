@@ -20,7 +20,7 @@ module FFI {
   }
 
   proc logDebug(msg) {
-    try! stderr.writeln("[Debug]   ", msg);
+    try! stderr.writeln("[Debug]   [", here, "]   ", msg);
   }
 
 
