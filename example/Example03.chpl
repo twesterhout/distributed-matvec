@@ -21,6 +21,7 @@ proc main() {
 
   testMultiwayMerge();
   var basis0 = new Basis("{\"number_spins\": 10, \"hamming_weight\": 5}");
+  basis0.build();
   var buckets0 = enumerateStates(basis0, 5);
   // ref v1 = buckets0[0];
   // ref v2 = buckets0[0].toArray();
@@ -33,6 +34,9 @@ proc main() {
   for (r, i) in zip(rs, 0 ..) {
     writeln(r, " ", [k in r] (buckets0[i, k.low], buckets0[i, k.high]));
   }
+
+  const blocks = statesFromHashedToBlock(buckets0);
+  writeln(blocks);
 
   // for k in buckets0.domain {
   //   writeln(buckets0[k]);

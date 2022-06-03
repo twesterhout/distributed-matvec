@@ -255,8 +255,11 @@ export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
   const basis = new Basis(p, owning=false);
   // var rs = localEnumerateRepresentatives(basis, lower, upper);
   var rs = enumerateStates(basis);
-  ref v = rs[here];
-  // v.shrink();
+  // ref v = rs[here];
+  var v = rs[here];
+  // writeln(v.type:string);
+  // writeln(getExternalArrayType(v):string);
+  // writeln(v._value.isDefaultRectangular():string);
   dest.deref() = convertToExternalArray(v);
 }
 
@@ -324,26 +327,37 @@ proc mergeRangesToOffsets(const ref ranges) {
   return offsets;
 }
 
-// config const statesFromHashedToBlockNumChunks = 7;
+config const statesFromHashedToBlockNumChunks = 7;
 
-// proc statesFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1)) {
-//   const ranges = determineMergeRanges(basisStates);
-//   const offsets = mergeRangesToOffsets(ranges);
-//   const numRanges = offsets.size - 1;
-//   const numStates = offsets[numRanges];
-//   const dom = {0 ..# numStates} dmapped Block(LocaleSpace);
-// 
-//   var blockBasisStates : [dom] uint(64);
-//   coforall rangeIdx in 0 ..# numRanges {
-//     const loc = dom.dsiIndexToLocale(offsets[rangeIdx]);
-//     on loc {
-//       const 
-//       var localBasisStates : {0 ..# basisStates.size, 
-// 
-// 
-//     }
-//   }
-// }
+proc statesFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1)) {
+  const ranges = determineMergeRanges(basisStates, statesFromHashedToBlockNumChunks);
+  const offsets = mergeRangesToOffsets(ranges);
+  const numRanges = offsets.size - 1;
+  const numStates = offsets[numRanges];
+  const dom = {0 ..# numStates} dmapped Block(LocaleSpace);
+
+  var blockBasisStates : [dom] uint(64);
+  coforall rangeIdx in 0 ..# numRanges {
+    const loc = dom.dist.dsiIndexToLocale(offsets[rangeIdx]);
+    on loc {
+      const localRanges = [i in LocaleSpace] ranges[i][rangeIdx];
+      const localCounts = [r in localRanges] r.size;
+      var localBasisStates = new BlockVector(uint(64), localCounts);
+      forall (i, r) in zip(LocaleSpace, localRanges) {
+        // ref v = localBasisStates.getBlock(i);
+        localBasisStates._data[i][0 ..# r.size] = basisStates._data[i][r];
+      }
+
+      var mergedStates : [0 ..# offsets[rangeIdx + 1] - offsets[rangeIdx]] uint(64) = noinit;
+      for (x, i) in zip(kMerge(localBasisStates), 0..) {
+        mergedStates[i] = x; 
+      }
+
+      blockBasisStates[offsets[rangeIdx] .. offsets[rangeIdx + 1] - 1] = mergedStates;
+    }
+  }
+  return blockBasisStates;
+}
 
 
 }

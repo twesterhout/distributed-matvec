@@ -91,6 +91,15 @@ class BlockVector {
   var _innerDom : domain(innerRank);
   var _data : [_outerDom] [_innerDom] eltType;
 
+  proc init(type eltType, counts : [] int) {
+    this.eltType = eltType;
+    this.innerRank = 1;
+    this._outerDom = counts.domain;
+    this._counts = counts;
+    const maxNumElts = max reduce _counts;
+    this._innerDom = {0 ..# maxNumElts};
+  }
+
   proc init(chunks : [] ?t)
       where chunks.domain.rank == 1 && isVector(t) {
     this.eltType = chunks[0].eltType;
@@ -136,12 +145,14 @@ class BlockVector {
     return _newArray(a);
   }
 
+  pragma "reference to const when const this"
+  pragma "fn returns aliasing array"
   inline proc this(loc : locale) { return getBlock(loc.id); }
 
-  inline proc this(i : int, j : int) ref where innerRank == 1 {
+  inline proc this(i : int, j) ref where innerRank == 1 {
     return _data[i][j];
   }
-  inline proc this(i : int, j : int, k : int) ref where innerRank == 2 {
+  inline proc this(i : int, j, k) ref where innerRank == 2 {
     return _data[i][j, k];
   }
 }

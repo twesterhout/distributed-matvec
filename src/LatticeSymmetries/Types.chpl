@@ -1,6 +1,8 @@
 module Types {
-  use CTypes;
   use FFI;
+
+  use CTypes;
+  use ByteBufferHelpers;
 
   record Basis {
     var payload : c_ptr(ls_hs_basis);
@@ -45,8 +47,33 @@ module Types {
       return c_str:string;
     }
 
+    proc chpl__serialize() {
+      logDebug("Calling chpl__serialize(" + this.locale:string + ") ...");
+      return (this.locale.id, payload:c_void_ptr);
+      // // assert(here == this.locale);
+      // var json_string : string;
+      // on this.locale {
+      //   logDebug("Serializing ...");
+      //   json_string = this.toJSON();
+      // }
+      // return json_string;
+    }
+
+    proc type chpl__deserialize(data) {
+      const (loc, payload) = data;
+      logDebug("Calling chpl__deserialize(" + data:string + ") ...");
+      var json_string : string;
+      on Locales[loc] {
+        logDebug("To JSON ...");
+        const c_str = ls_hs_basis_to_json(payload:c_ptr(ls_hs_basis));
+        defer ls_hs_destroy_string(c_str);
+        json_string = c_str:string;
+      }
+      return new Basis(json_string);
+    }
+
     proc _destroy() {
-      if (owning) then
+      if owning then
         ls_hs_destroy_basis_v2(payload);
     }
 
