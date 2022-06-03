@@ -1,5 +1,8 @@
 module MultiwayMerge {
 
+use FFI;
+use Vector;
+
 use List;
 use Search;
 use CTypes;
@@ -14,28 +17,58 @@ record Node {
   inline proc isInfinity() { return indexInChunk == -1; }
 }
 
-record TournamentTree {
-  var numberChunks : int;
-  var nodes : [0 ..# numberChunks] Node;
-
-  proc init(numberChunks : int)
-  {
-    this.numberChunks = numberChunks;
-    this.nodes = [i in 0..#numberChunks] new Node(-1, -1, -1);
-  }
-
-  inline proc innerParentIndex(i : int) {
-    assert(i > 0);
-    return i / 2;
-  }
-}
-
 private inline proc indexAccess(const ref chunks, i : int, j) const ref {
   return chunks[i][j];
+}
+private inline proc indexAccess(const ref chunks : BlockVector, i : int, j) const ref {
+  return chunks[i, j];
 }
 private inline proc indexAccess(const ref chunks : [?D] ?eltType, i : int, j) const ref
     where D.rank == 2 {
   return chunks[i, j];
+}
+private inline proc indexAccess(const ref chunks : [] Vector(?t), i : int, j) const ref
+    where chunks.domain.rank == 1 {
+  return chunks[i][j];
+}
+private inline proc indexAccess(const ref chunks : [] (c_ptr(?t), int), i : int, j) const ref
+    where chunks.domain.rank == 1 {
+  const (ptr, size) = chunks[i];
+  assert(j < size);
+  return ptr[j];
+}
+
+private inline proc chunkSize(const ref chunks : BlockVector, i : int) {
+  return chunks.count(i);
+}
+private inline proc chunkSize(const ref chunks : [] Vector(?t), i : int)
+    where chunks.domain.rank == 1 {
+  return chunks[i].size;
+}
+private inline proc chunkSize(const ref chunks : [] ?t, i : int)
+    where chunks.domain.rank == 2 {
+  return chunks.dim(1).size;
+}
+private inline proc chunkSize(const ref chunks : [] (c_ptr(?t), int), i : int)
+    where chunks.domain.rank == 1 {
+  const (ptr, size) = chunks[i];
+  return size;
+}
+
+private inline proc numChunks(const ref chunks : BlockVector) {
+  return chunks.numBlocks;
+}
+private inline proc numChunks(const ref chunks : [] Vector(?t))
+    where chunks.domain.rank == 1 {
+  return chunks.size;
+}
+private inline proc numChunks(const ref chunks : [] ?t)
+    where chunks.domain.rank == 2 {
+  return chunks.dim(0).size;
+}
+private inline proc numChunks(const ref chunks : [] (c_ptr(?t), int))
+    where chunks.domain.rank == 1 {
+  return chunks.size;
 }
 
 private inline proc _isLess(const ref a : Node, const ref b : Node,
@@ -47,73 +80,83 @@ private inline proc _isLess(const ref a : Node, const ref b : Node,
            < indexAccess(chunks, b.chunkIndex, b.indexInChunk);
 }
 
-private proc _insert(ref tree: TournamentTree, i : int, const ref node : Node,
-                     const ref chunks) : void {
-  assert(i != -1);
-  assert(!node.isEmpty());
-  if (tree.nodes[i].isEmpty()) { tree.nodes[i] = node; }
-  else {
-    const parent : int = tree.innerParentIndex(i);
-    if (_isLess(node, tree.nodes[i], chunks)) {
-      _insert(tree, parent, node, chunks);
-    }
-    else {
-      const old = tree.nodes[i];
-      tree.nodes[i] = node;
-      _insert(tree, parent, old, chunks);
-    }
-  }
-}
-private inline proc _insert(ref tree: TournamentTree, const ref node : Node,
-                            const ref chunks) : void {
-  _insert(tree, node.outerParentIndex, node, chunks);
-}
-
 private inline proc _makeNode(chunkIndex : int, in indexInChunk : int,
-                              outerParentIndex : int, const ref chunks,
-                              const ref counts) {
-  if chunkIndex >= chunks.dim(0).size || indexInChunk >= counts[chunkIndex] {
+                              outerParentIndex : int, chunks) {
+  if chunkIndex >= numChunks(chunks) || indexInChunk >= chunkSize(chunks, chunkIndex) then
     indexInChunk = -1;
-  }
   return new Node(chunkIndex, indexInChunk, outerParentIndex);
 }
 
-private proc _buildTree(const ref chunks, const ref counts) {
-  const numberChunks = chunks.dim(0).size + (chunks.dim(0).size % 2);
-  var tree = new TournamentTree(numberChunks);
+
+record TournamentTree {
+  var numberChunks : int;
+  var nodes : [0 ..# numberChunks] Node;
+  var chunks;
+
+  proc init(chunks)
+  {
+    this.numberChunks = numChunks(chunks) + (numChunks(chunks) % 2);
+    this.nodes = [i in 0 ..# numberChunks] new Node(-1, -1, -1);
+    this.chunks = c_const_ptrTo(chunks);
+  }
+
+  inline proc innerParentIndex(i : int) {
+    assert(i > 0);
+    return i / 2;
+  }
+
+  proc insert(i : int, const ref node : Node) : void {
+    assert(i != -1);
+    assert(!node.isEmpty());
+    if nodes[i].isEmpty() { nodes[i] = node; }
+    else {
+      const parent : int = innerParentIndex(i);
+      if _isLess(node, nodes[i], chunks.deref()) {
+        insert(parent, node);
+      }
+      else {
+        const old = nodes[i];
+        nodes[i] = node;
+        insert(parent, old);
+      }
+    }
+  }
+  inline proc insert(const ref node : Node) : void {
+    insert(node.outerParentIndex, node);
+  }
+
+  inline proc processOne() {
+    const result = nodes[0];
+    if (result.isInfinity()) { return result; }
+    nodes[0] = new Node(-1, -1, -1);
+    insert(_makeNode(result.chunkIndex, result.indexInChunk + 1,
+                     result.outerParentIndex, chunks.deref()));
+    return result;
+  }
+}
+
+private proc _buildTree(const ref chunks) {
+  var tree = new TournamentTree(chunks);
+  const numberChunks = tree.numberChunks;
   for i in 0 .. numberChunks / 2 - 1 {
     const outerParentIndex = numberChunks - 1 - i;
-    _insert(tree,
-        _makeNode(numberChunks - 1 - 2 * i, 0, outerParentIndex, chunks, counts),
-        chunks);
-    _insert(tree,
-        _makeNode(numberChunks - 2 - 2 * i, 0, outerParentIndex, chunks, counts),
-        chunks);
+    tree.insert(_makeNode(numberChunks - 1 - 2 * i, 0, outerParentIndex, chunks));
+    tree.insert(_makeNode(numberChunks - 2 - 2 * i, 0, outerParentIndex, chunks));
   }
   return tree;
 }
 
-private proc _processOne(ref tree : TournamentTree, const ref chunks, const ref counts) {
-  const result = tree.nodes[0];
-  if (result.isInfinity()) { return result; }
-  tree.nodes[0] = new Node(-1, -1, -1);
-  const node = _makeNode(result.chunkIndex, result.indexInChunk + 1,
-                         result.outerParentIndex, chunks, counts);
-  _insert(tree, node, chunks);
-  return result;
-}
-
-iter kMergeIndices(const ref chunks, const ref counts) {
-  var tree = _buildTree(chunks, counts);
-  var root = _processOne(tree, chunks, counts);
+iter kMergeIndices(chunks) {
+  var tree = _buildTree(chunks);
+  var root = tree.processOne();
   while (!root.isInfinity()) {
     yield (root.chunkIndex, root.indexInChunk);
-    root = _processOne(tree, chunks, counts);
+    root = tree.processOne();
   }
 }
 
-iter kMerge(const ref chunks, const ref counts) {
-  for (chunkIndex, indexInChunk) in kMergeIndices(chunks, counts) {
+iter kMerge(chunks) {
+  for (chunkIndex, indexInChunk) in kMergeIndices(chunks) {
     yield indexAccess(chunks, chunkIndex, indexInChunk);
   }
 }

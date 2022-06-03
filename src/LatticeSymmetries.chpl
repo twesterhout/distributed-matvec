@@ -7,6 +7,7 @@ module LatticeSymmetries {
   public use ConcurrentAccessor;
   public use CommunicationQueue;
   public use MultiwayMerge;
+  public use Vector;
 
   initExportedKernels();
   // use CTypes;

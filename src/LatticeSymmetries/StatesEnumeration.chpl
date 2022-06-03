@@ -2,6 +2,7 @@ module StatesEnumeration {
 
 use FFI;
 use Types;
+use Vector;
 
 use BitOps;
 use BlockDist;
@@ -13,9 +14,6 @@ use IO;
 use List;
 use RangeChunk;
 use Search;
-
-// TODO: probably shouldn't use it...
-use ArrayViewSlice;
 
 /* Get next integer with the same hamming weight.
 
@@ -112,80 +110,6 @@ proc determineEnumerationRanges(r : range(uint(64)), in numChunks : int,
                   .. unprojectedIndexToState(r.high, hammingWeight);
   }
   return ranges;
-}
-
-class Vector {
-  type eltType;
-  var _dom : domain(1);
-  var _arr : [_dom] eltType;
-  var _size : int;
-
-  proc init(type t) {
-    this.eltType = t;
-    this._size = 0;
-  }
-  proc init(arr : [] ?t) {
-    this.eltType = t;
-    this._dom = arr.dom;
-    this._arr = arr;
-    this._size = arr.size;
-  }
-
-  proc this(i : int) {
-    if i >= _size then
-      halt("index " + i:string + " is out of bounds for domain {0 ..# " + _size:string + "}");
-    return _arr[i];
-  }
-
-  proc reserve(capacity : int) {
-    if capacity > _dom.size then
-      _dom = {0 ..# capacity};
-  }
-
-  inline proc size { return _size; }
-
-  proc defaultGrow(factor : real = 1.5) {
-    const currentCapacity = _dom.size;
-    const newCapacity =
-      max(currentCapacity + 1, round(factor * currentCapacity):int);
-    reserve(newCapacity);
-  }
-
-  proc pushBack(x : eltType) {
-    if _size == _dom.size then
-      defaultGrow();
-    _arr[_size] = x;
-    _size += 1;
-  }
-
-  proc append(xs : [] eltType) {
-    if _size + xs.size > _dom.size then
-      reserve(_size + xs.size);
-    _arr[_size ..# xs.size] = xs;
-    _size += xs.size;
-  }
-  proc append(const ref xs : Vector(eltType)) {
-    append(xs._arr[0 ..# xs._size]);
-  }
-
-  proc shrink() {
-    if _size < _dom.size then
-      _dom = {0 ..# _size};
-  }
-
-  pragma "reference to const when const this"
-  pragma "fn returns aliasing array"
-  proc toArray() {
-    pragma "no auto destroy" var d = {0 ..# _size};
-    d._value._free_when_no_arrs = true;
-    d._value.definedConst = true;
-    var a = new unmanaged ArrayViewSliceArr(
-        eltType=_arr.eltType,
-        _DomPid=d._pid, dom=d._instance,
-        _ArrPid=_arr._pid, _ArrInstance=_arr._value);
-    d._value.add_arr(a, locking=false, addToList=false);
-    return _newArray(a);
-  }
 }
 
 /* Hash function which we use to map spin configurations to locale indices.
@@ -316,7 +240,7 @@ proc enumerateStates(const ref basis : Basis, in numChunks : int, globalRange : 
       vector.append(v);
     }
   }
-  return representatives;
+  return new BlockVector(representatives);
 }
 proc enumerateStates(const ref basis : Basis, numChunks : int = enumerateStatesNumChunks) {
   const lower = basis.minStateEstimate();
@@ -331,9 +255,9 @@ export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
   const basis = new Basis(p, owning=false);
   // var rs = localEnumerateRepresentatives(basis, lower, upper);
   var rs = enumerateStates(basis);
-  ref v = rs[here.id];
-  v.shrink();
-  dest.deref() = convertToExternalArray(v._arr);
+  ref v = rs[here];
+  // v.shrink();
+  dest.deref() = convertToExternalArray(v);
 }
 
 proc initExportedKernels() {
@@ -353,9 +277,9 @@ proc determineMergeBounds(const ref basisStates : [] uint(64), numChunks : int) 
   }
   return bounds;
 }
-inline proc determineMergeBounds(const ref basisStates : Vector(uint(64)), numChunks : int) {
-  return determineMergeBounds(basisStates.toArray(), numChunks);
-}
+// inline proc determineMergeBounds(const ref basisStates : Vector(uint(64)), numChunks : int) {
+//   return determineMergeBounds(basisStates.toArray(), numChunks);
+// }
 
 proc mergeBoundsToIndexRanges(const ref basisStates : [] uint(64),
                               const ref bounds : [] uint(64)) {
@@ -375,28 +299,51 @@ proc mergeBoundsToIndexRanges(const ref basisStates : [] uint(64),
   }
   return ranges;
 }
-inline proc mergeBoundsToIndexRanges(const ref basisStates : Vector(uint(64)),
-                                     const ref bounds : [] uint(64)) {
-  return mergeBoundsToIndexRanges(basisStates.toArray(), bounds);
-}
+// inline proc mergeBoundsToIndexRanges(const ref basisStates : Vector(uint(64)),
+//                                      const ref bounds : [] uint(64)) {
+//   return mergeBoundsToIndexRanges(basisStates.toArray(), bounds);
+// }
 
-proc determineMergeRanges(const ref basisStates : [] shared Vector(uint(64)), numChunks : int)
-    where basisStates.domain.rank == 1 {
-  const bounds = determineMergeBounds(basisStates[0], numChunks);
-  var ranges : [basisStates.domain] [0 ..# bounds.size] range(int);
-  forall (r, v) in zip(ranges, basisStates) {
+proc determineMergeRanges(const ref basisStates : BlockVector(uint(64), 1), numChunks : int) {
+  const bounds = determineMergeBounds(basisStates[here], numChunks);
+  var ranges : [basisStates._outerDom] [0 ..# bounds.size] range(int);
+  forall (r, i) in zip(ranges, 0 ..) {
     const localBounds = bounds;
-    r = mergeBoundsToIndexRanges(v, localBounds);
+    r = mergeBoundsToIndexRanges(basisStates.getBlock(i), localBounds);
   }
   return ranges;
 }
 
-
-proc statesFromHashedToBlock(const ref basisStates : [] shared Vector(uint(64))) {
-
-
+proc mergeRangesToOffsets(const ref ranges) {
+  const numRanges = ranges[0].size;
+  var offsets : [0 ..# numRanges + 1] int;
+  offsets[0] = 0;
+  for i in 0 ..# numRanges {
+    offsets[i + 1] = offsets[i] + (+ reduce [k in ranges.domain] ranges[k][i].size);
+  }
+  return offsets;
 }
 
+// config const statesFromHashedToBlockNumChunks = 7;
+
+// proc statesFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1)) {
+//   const ranges = determineMergeRanges(basisStates);
+//   const offsets = mergeRangesToOffsets(ranges);
+//   const numRanges = offsets.size - 1;
+//   const numStates = offsets[numRanges];
+//   const dom = {0 ..# numStates} dmapped Block(LocaleSpace);
+// 
+//   var blockBasisStates : [dom] uint(64);
+//   coforall rangeIdx in 0 ..# numRanges {
+//     const loc = dom.dsiIndexToLocale(offsets[rangeIdx]);
+//     on loc {
+//       const 
+//       var localBasisStates : {0 ..# basisStates.size, 
+// 
+// 
+//     }
+//   }
+// }
 
 
 }
