@@ -99,6 +99,10 @@ bin/Example03: example/Example03.chpl $(MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 
+bin/Example04: example/Example04.chpl $(MODULES)
+	@mkdir -p $(@D)
+	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+
 bin/dummy: src/dummy.chpl
 	@mkdir -p $(@D)
 	chpl -o $@ $<

@@ -274,10 +274,13 @@ proc initExportedKernels() {
 
 proc determineMergeBounds(const ref basisStates : [] uint(64), numChunks : int) {
   assert(basisStates.size >= numChunks);
+  assert(numChunks > 1);
   var bounds : [0 ..# numChunks] uint(64);
   for (chunk, bound) in zip(chunks(0 ..# basisStates.size, numChunks), bounds) {
     bound = basisStates[chunk.high];
   }
+  bounds[bounds.domain.low] = 0;
+  bounds[bounds.domain.high] = ~(0:uint(64));
   return bounds;
 }
 // inline proc determineMergeBounds(const ref basisStates : Vector(uint(64)), numChunks : int) {
@@ -286,6 +289,8 @@ proc determineMergeBounds(const ref basisStates : [] uint(64), numChunks : int) 
 
 proc mergeBoundsToIndexRanges(const ref basisStates : [] uint(64),
                               const ref bounds : [] uint(64)) {
+  assert(bounds[bounds.domain.low] <= basisStates[basisStates.domain.low]);
+  assert(bounds[bounds.domain.high] >= basisStates[basisStates.domain.high]);
   var ranges : [bounds.domain] range(int);
   for (r, b, i) in zip(ranges, bounds, 0..) {
     var loIdx = if i == 0 then 0 else ranges[i - 1].high + 1;
@@ -300,6 +305,7 @@ proc mergeBoundsToIndexRanges(const ref basisStates : [] uint(64),
     //   assert(basisStates[hiIdx] <= b);
     // }
   }
+  assert(ranges[bounds.size - 1].high == basisStates.size - 1);
   return ranges;
 }
 // inline proc mergeBoundsToIndexRanges(const ref basisStates : Vector(uint(64)),
@@ -308,6 +314,7 @@ proc mergeBoundsToIndexRanges(const ref basisStates : [] uint(64),
 // }
 
 proc determineMergeRanges(const ref basisStates : BlockVector(uint(64), 1), numChunks : int) {
+  // logDebug("determineMergeRanges: numStates=" + (+ reduce basisStates._counts):string);
   const bounds = determineMergeBounds(basisStates[here], numChunks);
   var ranges : [basisStates._outerDom] [0 ..# bounds.size] range(int);
   forall (r, i) in zip(ranges, 0 ..) {
@@ -327,37 +334,180 @@ proc mergeRangesToOffsets(const ref ranges) {
   return offsets;
 }
 
+iter parallelMergeRangesIterator(basisStates : BlockVector(uint(64), 1), numChunks : int) {
+  halt("not implemented, but required for compilation :(");
+}
+
+iter parallelMergeRangesIterator(param tag: iterKind, basisStates : BlockVector(uint(64), 1), numChunks : int)
+    where tag == iterKind.standalone {
+
+  const ranges = determineMergeRanges(basisStates, numChunks);
+  const offsets = mergeRangesToOffsets(ranges);
+  const numRanges = offsets.size - 1;
+  const numStates = offsets[numRanges];
+  // logDebug("numStates=" + numStates:string);
+
+  const space = {0 ..# numStates};
+  const dom = space dmapped Block(boundingBox=space);
+
+  coforall rangeIdx in 0 ..# numRanges {
+    const loc = dom.dist.dsiIndexToLocale(offsets[rangeIdx]);
+    on loc {
+      const localRange = offsets[rangeIdx] .. offsets[rangeIdx + 1] - 1;
+      const localChunks = [i in LocaleSpace] ranges[i][rangeIdx];
+      // logDebug("yielding: (" + localRange:string + ", " + localChunks:string + ")");
+      yield (localRange, localChunks);
+    }
+  }
+}
+
 config const statesFromHashedToBlockNumChunks = 7;
 
 proc statesFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1)) {
+  const numStates = + reduce basisStates._counts;
+  const space = {0 ..# numStates};
+  const dom = space dmapped Block(boundingBox=space);
+  var blockBasisStates : [dom] uint(64);
+
+  forall (currentRange, currentChunks) in
+      parallelMergeRangesIterator(basisStates, statesFromHashedToBlockNumChunks) {
+    const currentCounts = [chunk in currentChunks] chunk.size;
+    var localBasisStates = new BlockVector(uint(64), currentCounts);
+    // Get data from remote
+    forall (i, chunk) in zip(LocaleSpace, currentChunks) {
+      localBasisStates._data[i][0 ..# chunk.size] = basisStates._data[i][chunk];
+    }
+
+    // Perform local merge
+    var mergedStates : [0 ..# currentRange.size] uint(64) = noinit;
+    for ((chunkIndex, indexInChunk), offset) in zip(kMergeIndices(localBasisStates), 0..) {
+      mergedStates[offset] = localBasisStates._data[chunkIndex][indexInChunk];
+    }
+    
+    // Copy to remote
+    blockBasisStates[currentRange] = mergedStates;
+  }
+
+  return blockBasisStates;
+}
+
+proc makeBlockDomainForVectors(numVectors, numStates) {
+  const boundingBox = {0 ..# numVectors, 0 ..# numStates};
+  const targetLocales = reshape(Locales, {0 ..# 1, 0 ..# numLocales});
+  const dom : domain(2) dmapped Block(boundingBox=boundingBox, targetLocales=targetLocales) =
+    boundingBox;
+  return dom;
+}
+
+/*
+proc statesAndVectorsFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1),
+                                       const ref vectors : BlockVector(?eltType, 2)) {
   const ranges = determineMergeRanges(basisStates, statesFromHashedToBlockNumChunks);
   const offsets = mergeRangesToOffsets(ranges);
   const numRanges = offsets.size - 1;
   const numStates = offsets[numRanges];
-  const dom = {0 ..# numStates} dmapped Block(LocaleSpace);
+  const numVectors = vectors._innerDom.dim(0).size;
 
-  var blockBasisStates : [dom] uint(64);
+  const statesDomain = {0 ..# numStates} dmapped Block(LocaleSpace);
+  const vectorsDomain = makeBlockDomainForVectors(numVectors, numStates);
+  var blockBasisStates : [statesDomain] uint(64);
+  var blockVectors : [vectorsDomain] eltType;
+
   coforall rangeIdx in 0 ..# numRanges {
-    const loc = dom.dist.dsiIndexToLocale(offsets[rangeIdx]);
+    const loc = statesDomain.dist.dsiIndexToLocale(offsets[rangeIdx]);
     on loc {
       const localRanges = [i in LocaleSpace] ranges[i][rangeIdx];
       const localCounts = [r in localRanges] r.size;
       var localBasisStates = new BlockVector(uint(64), localCounts);
+      var localVectors = new BlockVector(eltType, numVectors, localCounts);
       forall (i, r) in zip(LocaleSpace, localRanges) {
         // ref v = localBasisStates.getBlock(i);
         localBasisStates._data[i][0 ..# r.size] = basisStates._data[i][r];
+        localVectors._data[i][.., 0 ..# r.size] = vectors._data[i][.., r];
       }
 
-      var mergedStates : [0 ..# offsets[rangeIdx + 1] - offsets[rangeIdx]] uint(64) = noinit;
-      for (x, i) in zip(kMerge(localBasisStates), 0..) {
-        mergedStates[i] = x; 
+      var mergedSize = offsets[rangeIdx + 1] - offsets[rangeIdx];
+      var mergedStates : [0 ..# mergedSize] uint(64) = noinit;
+      var mergedVectors : [0 ..# numVectors, 0 ..# mergedSize] eltType = noinit;
+
+
+      for ((chunkIndex, indexInChunk), offset) in zip(kMergeIndices(localBasisStates), 0..) {
+        mergedStates[offset] = localBasisStates._data[chunkIndex][indexInChunk];
+        foreach k in 0 ..# numVectors {
+          mergedVectors[k, offset] = localVectors._data[chunkIndex][k, indexInChunk];
+        }
       }
 
       blockBasisStates[offsets[rangeIdx] .. offsets[rangeIdx + 1] - 1] = mergedStates;
+      blockVectors[.., offsets[rangeIdx] .. offsets[rangeIdx + 1] - 1] = mergedVectors;
     }
   }
-  return blockBasisStates;
+  return (blockBasisStates, blockVectors);
+}
+*/
+
+private proc distributionCounts(const ref basisStates : [] uint(64)) {
+  var histogram : [LocaleSpace] int;
+  forall basisState in basisStates with (+ reduce histogram) {
+    const localeIdx = localeIdxOf(basisState);
+    histogram[localeIdx] += 1;
+  }
+  return histogram;
 }
 
 
+config const statesFromBlockToHashedNumChunks = 7;
+
+proc statesFromBlockToHashed(const ref basisStates : [] uint(64)) {
+  const counts = distributionCounts(basisStates);
+  var hashedBasisStates = new BlockVector(uint(64), counts);
+
+  coforall loc in Locales with (ref hashedBasisStates) do on loc {
+    ref dest = hashedBasisStates[loc];
+    var offset = 0;
+
+    for r in chunks(0 ..# basisStates.size, statesFromBlockToHashedNumChunks) {
+      // Download from remote
+      var localBasisStates = basisStates[r];
+      // Determine which states to copy
+      var mask : [0 ..# r.size] bool = noinit;
+      forall (x, shouldInclude) in zip(localBasisStates, mask) {
+        shouldInclude = localeIdxOf(x) == loc.id;
+      }
+      // Perform the copy
+      for (x, shouldInclude) in zip(localBasisStates, mask) {
+        if shouldInclude {
+          dest[offset] = x;
+          offset += 1;
+        }
+      }
+    }
+    assert(offset == dest.size);
+  }
+  return hashedBasisStates;
 }
+
+proc vectorsFromBlockToHashed(const ref basisStates : [] uint(64),
+                              const ref vectors : [] ?eltType) {}
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

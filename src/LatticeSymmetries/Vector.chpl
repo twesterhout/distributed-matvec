@@ -100,6 +100,15 @@ class BlockVector {
     this._innerDom = {0 ..# maxNumElts};
   }
 
+  proc init(type eltType, batchSize : int, counts : [] int) {
+    this.eltType = eltType;
+    this.innerRank = 2;
+    this._outerDom = counts.domain;
+    this._counts = counts;
+    const maxNumElts = max reduce _counts;
+    this._innerDom = {0 ..# batchSize, 0 ..# maxNumElts};
+  }
+
   proc init(chunks : [] ?t)
       where chunks.domain.rank == 1 && isVector(t) {
     this.eltType = chunks[0].eltType;

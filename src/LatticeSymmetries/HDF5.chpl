@@ -1,5 +1,6 @@
 module HDF5 {
   use CTypes;
+  use BlockDist;
 
   use LatticeSymmetries.FFI;
 
@@ -122,4 +123,23 @@ module HDF5 {
       assert(false);
     }
   }
+
+  proc readBasisStatesAsBlocks(filename : string, dataset : string) {
+    const shape = datasetShape(filename, dataset);
+    if shape.size != 1 then
+      halt("expected '" + dataset + "' to be one-dimensional, but it has shape " + shape:string);
+    const totalNumberStates = shape[0];
+  
+    const box = {0 ..# totalNumberStates};
+    const dom = box dmapped Block(box, Locales);
+    var states : [dom] uint(64);
+    coforall loc in Locales do on loc {
+      const indices = states.localSubdomain();
+      // logDebug("my subdomain: " + indices:string);
+      readDatasetChunk(filename, dataset, (indices.low,), states[indices]);
+    }
+    return states;
+  }
+
+
 }
