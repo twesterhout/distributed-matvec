@@ -14,11 +14,11 @@ hamiltonian:
                      [4, 6], [5, 7], [5, 8],
                      [6, 7], [6, 10], [7, 8], [7, 10], [8, 9], [8, 11], [9, 11]]
   terms:
-    - expression: "σˣ₀ σˣ₁"
+    - expression: "Sˣ₀ Sˣ₁"
       sites: *lattice
-    - expression: "σʸ₀ σʸ₁"
+    - expression: "Sʸ₀ Sʸ₁"
       sites: *lattice
-    - expression: "σᶻ₀ σᶻ₁"
+    - expression: "Sᶻ₀ Sᶻ₁"
       sites: *lattice
 observables: []
 number_vectors: 1

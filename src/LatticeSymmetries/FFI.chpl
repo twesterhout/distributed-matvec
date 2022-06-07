@@ -4,7 +4,7 @@ module FFI {
 
   pragma "no doc"
   pragma "fn synchronization free"
-  extern proc c_pointer_return(const ref x : ?t) : c_ptr(t);
+  private extern proc c_pointer_return(const ref x : ?t) : c_ptr(t);
 
   inline proc c_const_ptrTo(const ref arr: []) {
     if (!arr.isRectangular() || !arr.domain.dist._value.dsiIsLayout()) then
@@ -19,8 +19,27 @@ module FFI {
     return c_pointer_return(x);
   }
 
-  proc logDebug(msg) {
-    try! stderr.writeln("[Debug]   [", here, "]   ", msg);
+  proc unsafeViewAsExternalArray(const ref arr: []): chpl_external_array {
+    if !isIntegralType(arr.domain.idxType) {
+      // Probably not reachable any more, but may become reachable again
+      // once support for interoperability with array types expands.
+      compilerError("cannot return an array with indices that are not " +
+                    "integrals");
+    }
+    if arr.domain.stridable {
+      compilerError("cannot return a strided array");
+    }
+    if arr.domain.rank != 1 {
+      compilerError("cannot return an array with rank != 1");
+    }
+
+    var externalArr = chpl_make_external_array_ptr(
+      c_const_ptrTo(arr[arr.domain.low]), arr.size: uint);
+    return externalArr;
+  }
+
+  proc logDebug(msg...) {
+    try! stderr.writeln("[Debug]   [", here, "]   ", (...msg));
   }
 
 
@@ -93,6 +112,9 @@ module FFI {
   extern proc ls_hs_fixed_hamming_index_to_state(state_index : c_ptrdiff, hamming_weight : c_int) : uint(64);
 
   extern proc ls_hs_basis_build(basis : c_ptr(ls_hs_basis));
+
+  extern proc ls_hs_unchecked_set_representatives(basis : c_ptr(ls_hs_basis),
+                                                  states : c_ptr(chpl_external_array));
 
   extern proc ls_hs_state_index(basis : c_ptr(ls_hs_basis), batch_size : c_ptrdiff,
     spins : c_ptr(uint(64)), spins_stride : c_ptrdiff, indices : c_ptr(c_ptrdiff),

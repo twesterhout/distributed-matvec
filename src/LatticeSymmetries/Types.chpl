@@ -7,46 +7,59 @@ module Types {
   record Basis {
     var payload : c_ptr(ls_hs_basis);
     var owning : bool;
+    var _origin : locale;
+    var _json_repr : string;
 
     proc init(p : c_ptr(ls_hs_basis), owning : bool = true) {
-      logDebug("Basis(c_ptr(ls_hs_basis), bool)");
+      // logDebug("Basis(c_ptr(ls_hs_basis), bool)");
       assert(here == p.locale);
       this.payload = p;
       this.owning = owning;
+      this._origin = here;
+      complete();
+      if owning then
+        this._json_repr = _toJSON();
     }
-    proc init(json_string : string) {
-      logDebug("ls_hs_basis_from_json");
-      this.payload = ls_hs_basis_from_json(json_string.localize().c_str());
+    proc init(jsonString : string) {
+      // logDebug("ls_hs_basis_from_json");
+      const s = jsonString.localize();
+      this.payload = ls_hs_basis_from_json(s.c_str());
       this.owning = true;
+      this._origin = here;
+      this._json_repr = s;
     }
     proc init=(const ref from : Basis) {
-      if here == from.locale {
-        logDebug(here:string + ": ls_hs_clone_basis(" + from.payload:string + ")");
+      if here == from._origin {
         this.payload = ls_hs_clone_basis(from.payload);
         this.owning = true;
+        this._origin = here;
+        this._json_repr = from._json_repr;
       }
       else {
-        var json_string : string;
-        on from.locale {
-          const s = from.toJSON();
-          json_string = s;
+        var s : string;
+        on from._origin {
+          s = from.toJSON();
         }
-        logDebug("ls_hs_basis_from_json");
-        this.payload = ls_hs_basis_from_json(json_string.c_str());
+        this.payload = ls_hs_basis_from_json(s.c_str());
         this.owning = true;
+        this._origin = here;
+        this._json_repr = s;
       }
     }
 
-    proc toJSON() : string {
-      logDebug("ls_hs_basis_to_json");
+    proc _toJSON() : string {
       const c_str = ls_hs_basis_to_json(payload);
-      defer {
-        logDebug("ls_hs_destroy_string");
-        ls_hs_destroy_string(c_str);
-      }
+      defer ls_hs_destroy_string(c_str);
       return c_str:string;
     }
 
+    proc toJSON() const ref : string {
+      if _json_repr == "" then
+        halt("JSON representation not available");
+      return _json_repr;
+    }
+
+    /*
     proc chpl__serialize() {
       logDebug("Calling chpl__serialize(" + this.locale:string + ") ...");
       return (this.locale.id, payload:c_void_ptr);
@@ -64,13 +77,14 @@ module Types {
       logDebug("Calling chpl__deserialize(" + data:string + ") ...");
       var json_string : string;
       on Locales[loc] {
-        logDebug("To JSON ...");
+        // logDebug("To JSON ...");
         const c_str = ls_hs_basis_to_json(payload:c_ptr(ls_hs_basis));
         defer ls_hs_destroy_string(c_str);
         json_string = c_str:string;
       }
       return new Basis(json_string);
     }
+    */
 
     proc _destroy() {
       if owning then
@@ -82,6 +96,11 @@ module Types {
     }
 
     proc build() { ls_hs_basis_build(payload); }
+
+    proc uncheckedSetRepresentatives(representatives : [] uint(64)) {
+      var arr = unsafeViewAsExternalArray(representatives);
+      ls_hs_unchecked_set_representatives(payload, c_ptrTo(arr));
+    }
 
     proc isSpinBasis() { return payload.deref().particle_type == LS_HS_SPIN; }
     proc isSpinfulFermionicBasis() { return payload.deref().particle_type == LS_HS_SPINFUL_FERMION; }
@@ -116,9 +135,12 @@ module Types {
 
   operator Basis.= (ref lhs : Basis, const ref rhs : Basis) {
     assert(lhs.locale == rhs.locale);
+    assert(lhs._origin == lhs.locale);
     lhs._destroy();
     lhs.payload = ls_hs_clone_basis(rhs.payload);
     lhs.owning = true;
+    lhs._origin = rhs._origin;
+    lhs._json_repr = rhs._json_repr;
   }
 
   proc loadBasisFromYaml(filename : string) {
@@ -195,7 +217,7 @@ module Types {
     }
     proc init(raw : c_ptr(ls_hs_operator), owning : bool = true) {
       this.payload = raw;
-      this.basis = new Basis(this.payload.deref().basis, owning=false);
+      this.basis = new Basis(this.payload.deref().basis);
     }
     proc init=(const ref from : Operator) {
       halt("Operator.init= is not yet implemented");

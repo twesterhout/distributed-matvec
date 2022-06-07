@@ -140,10 +140,19 @@ class BlockVector {
   inline proc numBlocks { return _outerDom.size; }
   inline proc count(i) { return _counts[i]; }
 
+  inline proc getBlockDomain(blockIdx : int)
+      where innerRank == 1 {
+    return {0 ..# _counts[blockIdx]};
+  }
+  inline proc getBlockDomain(blockIdx : int)
+      where innerRank == 2 {
+    return {0 ..# _innerDom.dim(0).size, 0 ..# _counts[blockIdx]};
+  }
+
   pragma "reference to const when const this"
   pragma "fn returns aliasing array"
   proc getBlock(blockIdx : int) {
-    pragma "no auto destroy" var d = {0 ..# _counts[blockIdx]};
+    pragma "no auto destroy" var d = getBlockDomain(blockIdx);
     d._value._free_when_no_arrs = true;
     d._value.definedConst = true;
     var a = new unmanaged ArrayViewSliceArr(

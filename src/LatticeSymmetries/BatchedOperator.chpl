@@ -6,8 +6,8 @@ use Types;
 
 // TODO: this is currently implemented inefficiently
 private proc localCompressMultiply(batchSize : int, numberTerms : int,
-                                   sigmas : c_ptr(uint(64)), cs : c_ptr(complex(128)), xs : c_ptr(?eltType),
-                                   offsets : c_ptr(int)) {
+                                   sigmas : c_ptr(uint(64)), cs : c_ptr(complex(128)),
+                                   xs : c_ptr(?eltType), offsets : c_ptr(int)) {
   var offset : int = 0;
   var i : int = 0;
 
@@ -41,11 +41,12 @@ record BatchedOperator {
   var _offsets : [0 ..# batchSize + 1] int;
 
   proc init(const ref matrix : Operator, batchSize : int) {
-    this._matrixPtr = c_ptrTo(matrix);
+    this._matrixPtr = c_const_ptrTo(matrix);
     this.batchSize = batchSize;
     this._numberOffDiagTerms = matrix.numberOffDiagTerms();
     const numberTerms = max(_numberOffDiagTerms, 1);
     this._dom = {0 ..# (batchSize * (numberTerms + 1))};
+    logDebug("BatchedOperator._dom = ", this._dom);
   }
   proc init=(const ref other : BatchedOperator) {
     assert(other.locale == here);

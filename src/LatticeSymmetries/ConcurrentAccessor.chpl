@@ -22,7 +22,13 @@ record ConcurrentAccessor {
 
   proc init(ref arr : [] ?t, in numLocks : int = concurrentAccessorNumLocks)
       where !arr.domain.stridable && arr.domain.rank == 1 {
+    if arr.locale != here then
+      halt("ConcurrentAccessor can only be constructed around a local array");
     this.eltType = t;
+    // logDebug(arr);
+    // logDebug(arr.domain);
+    // logDebug(arr[arr.domain.low]);
+    // logDebug(arr[arr.domain.low].locale);
     this._data = c_ptrTo(arr[arr.domain.low]);
     this._numElts = arr.size;
     // It makes no sense to have more locks that there are array elements:
@@ -34,6 +40,8 @@ record ConcurrentAccessor {
   }
 
   inline proc _blockIdx(i : int) : int {
+    if i >= _numElts then
+      halt("index out of bounds: i=" + i:string + ", but _numElts=" + _numElts:string);
     return i / _blockSize;
   }
 

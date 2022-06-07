@@ -141,5 +141,23 @@ module HDF5 {
     return states;
   }
 
+  proc readVectorsAsBlocks(filename : string, dataset : string, type eltType = real(64)) {
+    const shape = datasetShape(filename, dataset);
+    if shape.size != 2 then
+      halt("expected '" + dataset + "' to be two-dimensional, but it has shape " + shape:string);
+    const numberVectors = shape[0];
+    const totalNumberStates = shape[1];
+  
+    const boundingBox = {0 ..# numberVectors, 0 ..# totalNumberStates};
+    const targetLocales = reshape(Locales, {0 ..# 1, 0 ..# numLocales});
+    const dom = boundingBox dmapped Block(boundingBox, targetLocales);
+    var vectors : [dom] eltType;
+    coforall loc in Locales do on loc {
+      const indices = vectors.localSubdomain();
+      logDebug("my subdomain: " + indices:string);
+      readDatasetChunk(filename, dataset, indices.low, vectors[indices]);
+    }
+    return vectors;
+  }
 
 }
