@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     # latest
     container:
-      image: chapel/chapel # or chapel/chapel-gasnet-smp if you want multi-locale
+      image: chapel/chapel:1.26.0 # or chapel/chapel-gasnet-smp if you want multi-locale
     steps:
     - uses: actions/checkout@v2
     - name: Install dependencies
