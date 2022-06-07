@@ -105,9 +105,9 @@ class CommunicationQueue {
     const ref sigmas = _basisStates[localeIdx][0 ..# size];
     const ref cs = _coeffs[localeIdx][0 ..# size];
     var copyComplete$ : single bool;
-    on Locales[localeIdx] {
-      const basisStates = sigmas;
-      const coeffs = cs;
+    begin on Locales[localeIdx] {
+      const basisStates : [0 ..# size] uint(64) = sigmas;
+      const coeffs : [0 ..# size] cs.eltType = cs;
       copyComplete$.writeEF(true);
       ref queue = globalAllQueues[here.id]; // :c_ptr(owned CommunicationQueue(eltType));
       // if queue == nil then
