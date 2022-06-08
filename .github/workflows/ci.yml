@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 env:
-  LS_HS_VERSION: abe34c4
+  LS_HS_VERSION: db4f150
 
 jobs:
   linux_tests:
@@ -21,7 +21,7 @@ jobs:
         apt-get install -y --no-install-recommends libnuma-dev libgmp-dev libffi-dev patchelf bzip2 unzip
     - name: Install dependencies (3)
       run: |
-        wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/continuous/lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
+        wget --no-verbose https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/continuous/lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
         # patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
