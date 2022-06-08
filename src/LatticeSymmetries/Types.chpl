@@ -17,8 +17,8 @@ module Types {
       this.owning = owning;
       this._origin = here;
       complete();
-      if owning then
-        this._json_repr = _toJSON();
+      // if owning then
+      this._json_repr = _toJSON();
     }
     proc init(jsonString : string) {
       // logDebug("ls_hs_basis_from_json");

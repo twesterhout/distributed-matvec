@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 env:
-  LS_HS_VERSION: db4f150
+  LS_HS_VERSION: 812bf24
 
 jobs:
   linux_tests:

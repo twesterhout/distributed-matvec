@@ -32,7 +32,11 @@ proc main() {
   // writeln(buckets0);
   const rs = determineMergeRanges(buckets0, 5);
   for (r, i) in zip(rs, 0 ..) {
-    writeln(r, " ", [k in r] (buckets0[i, k.low], buckets0[i, k.high]));
+    write(r, " ");
+    for k in r do
+      if k.size > 0 then
+        write((buckets0[i, k.low], buckets0[i, k.high]), " ");
+    writeln();
   }
 
   const blocks = statesFromHashedToBlock(buckets0);

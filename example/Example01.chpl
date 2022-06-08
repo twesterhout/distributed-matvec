@@ -1,105 +1,10 @@
 use LatticeSymmetries;
 use Time;
-use RangeChunk;
-
-proc bas() {
-}
-
-proc testConstruction() {
-  // var basis = SpinBasis(4);
-  // writeln(localEnumerateRepresentatives(basis));
-
-  // basis = SpinlessFermionicBasis(4, 1);
-  // writeln(localEnumerateRepresentatives(basis));
-
-  // const basis = SpinfulFermionicBasis(numberSites=3, numberUp=2, numberDown=1);
-  // const representatives = localEnumerateRepresentatives(basis);
-
-  const basis = SpinChain10();
-  basis.build();
-  writeln(basis.representatives().size);
-  return;
-
-  var alphas = [
-    31,
-    47,
-    55,
-    28,
-    30
-  ]:uint(64);
-  var (areRepresentatives, norms) = isRepresentative(basis, alphas);
-  writeln(areRepresentatives);
-  writeln(norms);
-}
-
-
-config const kPhysicalSystem : string = "kagome12";
-
-proc benchmarkBuild(model : string) {
-  var timer = new Timer();
-
-  var json : string;
-  if (model == "chain10") {
-    json = "{\"number_spins\": 10, \"hamming_weight\": 5, \"spin_inversion\": -1,\
-             \"symmetries\": [\
-               {\"permutation\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 0], \"sector\": 5},\
-               {\"permutation\": [9, 8, 7, 6, 5, 4, 3, 2, 1, 0], \"sector\": 1}\
-             ] }";
-  } else if (model == "kagome12") {
-    json = "{\"number_spins\": 12, \"hamming_weight\": 6}";
-  }
-  else if (model == "kagome16") {
-    json = "{\"number_spins\": 16, \"hamming_weight\": 8}";
-  }
-  else if (model == "square4x4") {
-    json = "{\"number_spins\": 16, \"hamming_weight\": 8, \"spin_inversion\": 1,\
-             \"symmetries\": [\
-               {\"permutation\": [1, 2, 3, 0, 5, 6, 7, 4, 9, 10, 11, 8, 13, 14, 15, 12], \"sector\": 0},\
-               {\"permutation\": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3], \"sector\": 0},\
-               {\"permutation\": [3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12], \"sector\": 0},\
-               {\"permutation\": [12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3], \"sector\": 0},\
-               {\"permutation\": [3, 7, 11, 15, 2, 6, 10, 14, 1, 5, 9, 13, 0, 4, 8, 12], \"sector\": 0}\
-             ] }";
-  }
-  else {
-    halt("invalid model: " + model);
-  }
-
-  timer.start();
-  var basis = SpinBasis(json);
-  timer.stop();
-  writeln("Basis construction took: ", timer.elapsed(), " seconds");
-
-  timer.clear();
-  timer.start();
-  basis.build();
-  timer.stop();
-  writeln("Building representatives took: ", timer.elapsed(), " seconds");
-}
-
 
 proc main() {
   initRuntime();
+  defer deinitRuntime();
 
-  var basis0 = new Basis("{\"number_spins\": 10, \"hamming_weight\": 5}");
-  writeln("Locale[0]: ", basis0.numberSites(), ", ", basis0.isHammingWeightFixed());
-
-  var test : [0 ..# 10] bool;
-  forall t in test {
-    t = basis0.isHammingWeightFixed();
-  }
-
-  var buckets0 = enumerateStates(basis0, 5);
-
-  for k in buckets0.domain {
-    writeln(buckets0[k]);
-  }
-  return 0;
-
-  benchmarkBuild(kPhysicalSystem);
-
-  // testConstruction();
-  // return 0;
   var basis = SpinBasis(4, 2);
   writeln(basis.numberSites());
   writeln(basis.isHammingWeightFixed());
@@ -150,8 +55,4 @@ proc main() {
   timer.stop();
   writeln(y);
   writeln(timer.elapsed());
-}
-
-proc deinit() {
-  deinitRuntime();
 }

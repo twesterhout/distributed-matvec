@@ -38,7 +38,7 @@ endif
 CHPL_ARGS =
 
 .PHONY: examples
-examples: bin/Example01
+examples: bin/Example01 bin/Example02 bin/Example03 bin/Example04 bin/Example05
 
 .PHONY: test
 test: bin/TestStatesEnumeration bin/TestMatrixVectorProduct
@@ -93,6 +93,10 @@ bin/TestMatrixVectorProduct: test/TestMatrixVectorProduct.chpl $(MODULES)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 
 bin/Example01: example/Example01.chpl $(MODULES)
+	@mkdir -p $(@D)
+	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+
+bin/Example02: example/Example02.chpl $(MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 
