@@ -13,16 +13,14 @@ jobs:
       image: chapel/chapel:1.26.0 # or chapel/chapel-gasnet-smp if you want multi-locale
     steps:
     - uses: actions/checkout@v2
-    - name: Install dependencies
+    - name: Install dependencies (1)
       run: |
         apt-get update
+    - name: Install dependencies (2)
+      run: |
         apt-get install -y --no-install-recommends libnuma-dev libgmp-dev libffi-dev patchelf bzip2 unzip
-
-        # sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
-        # echo 'LANG="en_US.UTF-8"' >/etc/default/locale
-        # dpkg-reconfigure --frontend=noninteractive locales
-        # update-locale LANG=en_US.UTF-8
-
+    - name: Install dependencies (3)
+      run: |
         wget -q https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/continuous/lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
