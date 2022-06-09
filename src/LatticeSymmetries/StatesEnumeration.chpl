@@ -1,18 +1,19 @@
 module StatesEnumeration {
 
-use Types;
 use FFI;
+use Types;
+use Vector;
 
 use BitOps;
-use List;
-// use CTypes;
-use CPtr;
-use SysCTypes;
-use IO;
-use DynamicIters;
-use CyclicDist;
 use BlockDist;
+use ChplConfig;
+use CTypes;
+use CyclicDist;
+use DynamicIters;
+use IO;
+use List;
 use RangeChunk;
+use Search;
 
 /* Get next integer with the same hamming weight.
 
@@ -58,44 +59,6 @@ private proc manyNextState(v: uint(64), bound: uint(64), buffer: [] uint(64),
     else return manyNextStateImpl(v, bound, buffer, false);
 }
 
-private inline proc testBit(bits: uint(64), i: int): bool { return ((bits >> i) & 1):bool; }
-private inline proc clearBit(bits: uint(64), i: int) { return bits & ~(1:uint(64) << i); }
-private inline proc setBit(bits: uint(64), i: int) { return bits | (1:uint(64) << i); }
-
-/* Get the closest to `x` integer with Hamming weight `hammingWeight`.
- */
-private inline proc closestWithFixedHamming(in x: uint(64), hammingWeight: uint): uint(64) {
-  assert(hammingWeight <= 64, "Hamming weight too big");
-  var weight = popcount(x);
-  if (weight > hammingWeight) {
-      // Keep clearing lowest bits until we reach the desired Hamming weight.
-      var i = 0;
-      while (weight > hammingWeight) {
-        assert(i < 64);
-        if (testBit(x, i)) {
-            x = clearBit(x, i);
-            weight -= 1;
-        }
-        i += 1;
-      }
-      // NOTE: why??
-      // var maxValue = hammingWeight == 0 ? (0:uint(64)) : (~(0:uint(64)) << (64 - hammingWeight));
-      // if (x < max_value) { x = next_state<true>(x); }
-  }
-  else if (weight < hammingWeight) {
-    // Keep setting lowest bits until we reach the desired Hamming weight.
-    var i = 0;
-    while (weight < hammingWeight) {
-      assert(i < 64);
-      if (!testBit(x, i)) {
-          x = setBit(x, i);
-          weight += 1;
-      }
-      i += 1;
-    }
-  }
-  return x;
-}
 
 config const isRepresentativeBatchSize : int = 65536;
 
@@ -133,69 +96,20 @@ private inline proc unprojectedIndexToState(stateIndex : int, hammingWeight : in
    `chunk` we have that `popcount(chunk.low) == popcount(chunk.high) == popcount(r.low)` if
    `isHammingWeightFixed` was set to `true`.
  */
-proc determineEnumerationRanges(r : range(uint(64)), numChunks : int, isHammingWeightFixed : bool) {
+proc determineEnumerationRanges(r : range(uint(64)), in numChunks : int,
+                                isHammingWeightFixed : bool) {
   const hammingWeight = if isHammingWeightFixed then popcount(r.low):int else -1;
   const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
   const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
   const totalSize = highIdx - lowIdx + 1;
-
+  if numChunks > totalSize then
+    numChunks = totalSize;
   var ranges = newCyclicArr({0 ..# numChunks}, range(uint(64)));
   for (r, i) in zip(chunks(lowIdx .. highIdx, numChunks), 0..) {
-    ranges[i] = unprojectedIndexToState(r.low, hammingWeight) .. unprojectedIndexToState(r.high, hammingWeight);
+    ranges[i] = unprojectedIndexToState(r.low, hammingWeight)
+                  .. unprojectedIndexToState(r.high, hammingWeight);
   }
-  // Chapel's RangeChunk is bu-u-ugy :)
-  // var tempRanges : [0 ..# numChunks] range(int) = ;
   return ranges;
-}
-
-class Vector {
-  type eltType;
-  var _dom : domain(1);
-  var _arr : [_dom] eltType;
-  var _size : int;
-
-  proc init(type t) {
-    this.eltType = t;
-    this._size = 0;
-  }
-  proc init(arr : [] ?t) {
-    this.eltType = t;
-    this._dom = arr.dom;
-    this._arr = arr;
-    this._size = arr.size;
-  }
-
-  proc reserve(capacity : int) {
-    if capacity > _dom.size then
-      _dom = {0 ..# capacity};
-  }
-
-  inline proc size() { return _size; }
-
-  proc defaultGrow(factor : real = 1.5) {
-    const currentCapacity = _dom.size;
-    const newCapacity = round(factor * currentCapacity):int;
-    reserve(newCapacity);
-  }
-
-  proc pushBack(x : eltType) {
-    if _size == _dom.size then
-      defaultGrow();
-    _arr[_size] = x;
-    _size += 1;
-  }
-
-  proc append(xs : [] eltType) {
-    if _size + xs.size > _dom.size then
-      reserve(_size + xs.size);
-    _arr[_size ..# xs.size] = xs;
-    _size += xs.size;
-  }
-  proc append(const ref xs : Vector(eltType)) {
-    append(xs._arr[0 ..# xs._size]);
-  }
-
-  // inline proc toArray() ref { return _arr[0 ..# _size]; }
 }
 
 /* Hash function which we use to map spin configurations to locale indices.
@@ -212,14 +126,21 @@ private inline proc hash64_01(in x: uint(64)): uint(64) {
   return x;
 }
 
-inline proc localeIdxOf(basisState : uint(64)) : int {
+inline proc localeIdxOf(basisState : uint(64)) : int 
+    where CHPL_COMM == "" {
+  return 0;
+}
+inline proc localeIdxOf(basisState : uint(64)) : int 
+    where CHPL_COMM != "" {
   return (hash64_01(basisState) % numLocales:uint):int;
 }
 
 private proc _enumerateStatesUnprojected(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
   const isHammingWeightFixed = basis.isHammingWeightFixed();
-  if isHammingWeightFixed then
-    assert(popcount(r.low) == popcount(r.high));
+  if isHammingWeightFixed && popcount(r.low) != popcount(r.high) then
+    halt("r.low=" + r.low:string + " and r.high=" + r.high:string
+        + " have different Hamming weight: " + popcount(r.low):string
+        + " vs. " + popcount(r.high):string);
   const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
   const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
   const totalCount = highIdx - lowIdx + 1;
@@ -274,7 +195,7 @@ private proc _enumerateStatesProjected(r : range(uint(64)), const ref basis : Ba
   }
 }
 private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
-  logDebug("_enumerateStates");
+  // logDebug("_enumerateStates");
   if basis.requiresProjection() {
     _enumerateStatesProjected(r, basis, outVectors);
   }
@@ -289,10 +210,15 @@ private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis, ref 
 proc _emptyVectors(type t) : [LocaleSpace] shared Vector(t)
   { return [loc in LocaleSpace] new shared Vector(t); }
 
-proc enumerateStates(globalRange : range(uint(64)), numChunks : int, const ref basis : Basis) {
-  logDebug("enumerateStates");
+config const enumerateStatesNumChunks : int = 10 * numLocales * here.maxTaskPar;
+
+proc enumerateStates(const ref basis : Basis, in numChunks : int, globalRange : range(uint(64))) {
+  // logDebug("enumerateStates");
   const isHammingWeightFixed = basis.isHammingWeightFixed();
   const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
+  assert(ranges.size <= numChunks);
+  numChunks = ranges.size; // We could have fewer elements in the range than numChunks.
+                           // In such case, we limit numChunks
   const D = {0 ..# numChunks} dmapped Cyclic(startIdx=0);
   var buckets: [D] [LocaleSpace] shared Vector(uint(64)) = [d in D] _emptyVectors(uint(64));
   // noinit;
@@ -308,194 +234,34 @@ proc enumerateStates(globalRange : range(uint(64)), numChunks : int, const ref b
   var representatives : [OnePerLocale] shared Vector(uint(64)) =
     [loc in OnePerLocale] new shared Vector(uint(64));
   forall (vector, localeIdx) in zip(representatives, LocaleSpace) {
-    vector.reserve(+ reduce [bucket in buckets] bucket[localeIdx].size());
+    vector.reserve(+ reduce [bucket in buckets] bucket[localeIdx].size);
     for bucket in buckets {
       const ref v = bucket[localeIdx];
       vector.append(v);
     }
   }
-  return representatives;
+  return new BlockVector(representatives);
 }
-
-config const enumerateStatesWithProjectionNumChunks : int = 10 * here.maxTaskPar;
-
-/* We want to split `r` into `numChunks` non-overlapping ranges but such that for each range
-   `chunk` we have that `popcount(chunk.low) == popcount(chunk.high) == popcount(r.low)` if
-   `isHammingWeightFixed` was set to `true`.
- */
-iter _customChunks(r : range(uint(64)), numChunks : int, isHammingWeightFixed : bool) {
-  logDebug("Creating " + numChunks:string + " chunks for a range with " + r.size:string + " values ...");
-  assert(r.size >= numChunks, "more chunks than elements");
-  // Start by splitting r into numChunks chunks without worrying about the Hamming weight
-  const chunkSize : real = r.size:real / numChunks;
-  var offsets : [0 ..# numChunks + 1] uint(64) = noinit;
-  foreach i in 0 ..# numChunks {
-    offsets[i] = r.low + (i * chunkSize):uint;
-    assert(offsets[i] <= r.high, "offsets[i] <= r.high");
-  }
-  offsets[numChunks] = r.high;
-
-  if isHammingWeightFixed {
-    assert(popcount(r.low) == popcount(r.high), "Hamming weight error");
-    const hamming = popcount(r.low);
-    foreach x in offsets[1 ..# numChunks - 1] do
-      x = closestWithFixedHamming(x, hamming);
-    foreach x in offsets do
-      assert(popcount(x) == popcount(r.low), "Hamming weight error");
-  }
-
-  var b = offsets[0];
-  var e = offsets[1];
-  assert(b <= e);
-  yield b .. e;
-  for i in 1 ..# numChunks - 1 {
-    b = offsets[i];
-    e = offsets[i + 1];
-    assert(b <= e);
-    b = if isHammingWeightFixed then nextState(b, true)
-                                else nextState(b, false);
-    if b > e then yield e + 1 .. e;
-             else yield b .. e;
-  }
+proc enumerateStates(const ref basis : Basis, numChunks : int = enumerateStatesNumChunks) {
+  const lower = basis.minStateEstimate();
+  const upper = basis.maxStateEstimate();
+  return enumerateStates(basis, numChunks, lower .. upper);
 }
-
-
-private proc enumerateStatesWithProjection(lower : uint(64), upper : uint(64),
-                                           const ref basis : Basis) {
-  logDebug("Calling enumerateStatesWithProjection lower=" + lower:string +
-           ", upper=" + upper:string + " ...");
-  const isHammingWeightFixed = basis.isHammingWeightFixed();
-  const numChunks : int = min(enumerateStatesWithProjectionNumChunks, (upper - lower + 1):int);
-  var todo : [0 ..# numChunks] range(uint(64)) = _customChunks(lower .. upper, numChunks, isHammingWeightFixed);
-  var buffers : [0 ..# numChunks] list(uint(64));
-  var countAccumulator : atomic int = 0;
-  forall i in dynamic(0 ..# numChunks) {
-    const ref chunk = todo[i];
-    ref buffer = buffers[i];
-    for x in findStatesInRange(chunk.low:uint, chunk.high:uint, isHammingWeightFixed, basis) {
-      buffer.append(x);
-    }
-    countAccumulator.add(buffer.size);
-    // writeln(chunk, ": ", buffer);
-  }
-  // var buffer : list(uint(64));
-  // for x in findStatesInRange(lower, upper, isHammingWeightFixed, basis) {
-  //   buffer.append(x);
-  // }
-  const count : int = countAccumulator.read();
-  var rs : [0 ..# count] uint(64) = noinit;
-  var offset = 0;
-  for buffer in buffers {
-    rs[offset ..# buffer.size] = buffer;
-    offset += buffer.size;
-  }
-  assert(offset == count);
-  return rs;
-}
-
-private proc enumerateStatesFixedHamming(lower : uint(64), upper : uint(64),
-                                         const ref basis : Basis) {
-  logDebug("Calling enumerateStatesFixedHamming lower=" + lower:string +
-           ", upper=" + upper:string + " ...");
-  assert(popcount(lower) == popcount(upper));
-  // The following computes indices of lower and upper
-  var _alphas : c_array(uint(64), 2);
-  _alphas[0] = lower;
-  _alphas[1] = upper;
-  var _indices : c_array(c_ptrdiff, 2);
-  ls_hs_state_index(basis.payload, 2, _alphas, 1, _indices, 1);
-  var lowerIdx = _indices[0];
-  var upperIdx = _indices[1];
-  // Now that we know the lowerIdx and upperIdx, it's trivial to allocate an
-  // array of the right size
-  var rs : [0 ..# (upperIdx - lowerIdx + 1)] uint(64) = noinit;
-  var v = lower;
-  for i in rs.domain {
-    rs[i] = v;
-    v = nextStateFixedHamming(v);
-  }
-  return rs;
-}
-
-proc localEnumerateRepresentatives(const ref basis : Basis,
-                                   lower : uint(64) = basis.minStateEstimate(),
-                                   upper : uint(64) = basis.maxStateEstimate()) {
-  if (basis.requiresProjection()) {
-    return enumerateStatesWithProjection(lower, upper, basis);
-  }
-  if (basis.isStateIndexIdentity()) {
-    var rs : [0 ..# (upper - lower + 1)] uint(64) = lower .. upper;
-    return rs;
-  }
-  if (basis.isHammingWeightFixed()) {
-    return enumerateStatesFixedHamming(lower, upper, basis);
-  }
-
-  assert(basis.isSpinfulFermionicBasis());
-  const numberSites = basis.numberSites();
-  const mask = (1 << numberSites) - 1; // isolate the lower numberSites bits
-  const numberUp = basis.numberUp();
-  const numberDown = basis.numberParticles() - numberUp;
-  const basisA = SpinBasis(numberSites, numberUp);
-  const basisB = SpinBasis(numberSites, numberDown);
-  // NOTE: Chapel doesn't seem to support recursive functions returning arrays :(
-  // const rsA = localEnumerateRepresentatives(basisA, lower & mask, upper & mask);
-  // const rsB = localEnumerateRepresentatives(basisB,
-  //   (lower >> numberSites) & mask, (upper >> numberSites) & mask);
-  const rsA = enumerateStatesFixedHamming(lower & mask, upper & mask, basisA);
-  const rsB = enumerateStatesFixedHamming((lower >> numberSites) & mask, (upper >> numberSites) & mask, basisB);
-
-  var rs : [0 ..# (rsA.size * rsB.size)] uint(64) = noinit;
-  var offset : int = 0;
-  for b in rsB {
-    for a in rsA {
-      rs[offset] = (b << numberSites) | a;
-      offset += 1;
-    }
-  }
-  return rs;
-}
-
-// proc _generateBucketRanges() {
-//   coforall loc in Locales do on loc {
-//     ref localRanges = _ranges[loc.id];
-//     ref localStates = _representatives[loc.id][0 ..# _counts[loc.id]];
-//     const numberBuckets = 1 << _numberBits;
-//     var offset = 0;
-//     for i in 0 ..# numberBuckets {
-//       localRanges[i] = offset;
-//       // writeln("ranges[", loc.id, "][", i, "] = ", offset);
-//       while offset != localStates.size && bucketIndex(localStates[offset]) == i {
-//         offset += 1;
-//       }
-//     }
-//     localRanges[numberBuckets] = offset;
-//     assert(offset == localStates.size);
-//   }
-// }
-// proc localOffsetsForStates(numberBits : int, shift : int,
-//                            const ref representatives : [?D] uint(64)) {
-//   const numberBuckets = 1 << numberBits;
-//   var ranges : [0 ..# numberBuckets + 1] int(64);
-//   var offset = 0;
-//   for i in 0 ..# numberBuckets {
-//     ranges[i] = offset;
-//     while offset != representatives.size && (representatives[offset] >> shift):int == i {
-//       offset += 1;
-//     }
-//   }
-//   ranges[numberBuckets] = offset;
-//   assert(offset == representatives.size);
-//   return ranges;
-// }
 
 export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
                                               lower : uint(64),
                                               upper : uint(64),
                                               dest : c_ptr(chpl_external_array)) {
+  logDebug("ls_chpl_enumerate_representatives ...");
   const basis = new Basis(p, owning=false);
-  var rs = localEnumerateRepresentatives(basis, lower, upper);
-  dest.deref() = convertToExternalArray(rs);
+  // var rs = localEnumerateRepresentatives(basis, lower, upper);
+  var rs = enumerateStates(basis);
+  // ref v = rs[here];
+  var v = rs[here];
+  // writeln(v.type:string);
+  // writeln(getExternalArrayType(v):string);
+  // writeln(v._value.isDefaultRectangular():string);
+  dest.deref() = convertToExternalArray(v);
 }
 
 proc initExportedKernels() {
@@ -505,6 +271,316 @@ proc initExportedKernels() {
   logDebug("Initializing chpl_kernels ...");
   ls_hs_internal_set_chpl_kernels(c_ptrTo(kernels));
 }
-initExportedKernels();
+
+
+proc determineMergeBounds(const ref basisStates : [] uint(64), numChunks : int) {
+  assert(basisStates.size >= numChunks);
+  assert(numChunks > 1);
+  var bounds : [0 ..# numChunks] uint(64);
+  for (chunk, bound) in zip(chunks(0 ..# basisStates.size, numChunks), bounds) {
+    bound = basisStates[chunk.high];
+  }
+  bounds[bounds.domain.low] = 0;
+  bounds[bounds.domain.high] = ~(0:uint(64));
+  return bounds;
+}
+// inline proc determineMergeBounds(const ref basisStates : Vector(uint(64)), numChunks : int) {
+//   return determineMergeBounds(basisStates.toArray(), numChunks);
+// }
+
+proc mergeBoundsToIndexRanges(const ref basisStates : [] uint(64),
+                              const ref bounds : [] uint(64)) {
+  assert(bounds[bounds.domain.low] <= basisStates[basisStates.domain.low]);
+  assert(bounds[bounds.domain.high] >= basisStates[basisStates.domain.high]);
+  var ranges : [bounds.domain] range(int);
+  for (r, b, i) in zip(ranges, bounds, 0..) {
+    var loIdx = if i == 0 then 0 else ranges[i - 1].high + 1;
+    var (found, hiIdx) = binarySearch(basisStates, b, lo=loIdx);
+    if !found then
+      hiIdx -= 1;
+    r = loIdx .. hiIdx;
+    // if hiIdx - loIdx >= 0 {
+    //   if i != 0 {
+    //     assert(basisStates[loIdx] > bounds[i - 1]);
+    //   }
+    //   assert(basisStates[hiIdx] <= b);
+    // }
+  }
+  assert(ranges[bounds.size - 1].high == basisStates.size - 1);
+  return ranges;
+}
+// inline proc mergeBoundsToIndexRanges(const ref basisStates : Vector(uint(64)),
+//                                      const ref bounds : [] uint(64)) {
+//   return mergeBoundsToIndexRanges(basisStates.toArray(), bounds);
+// }
+
+proc determineMergeRanges(const ref basisStates : BlockVector(uint(64), 1), numChunks : int) {
+  // logDebug("determineMergeRanges: numStates=" + (+ reduce basisStates._counts):string);
+  const bounds = determineMergeBounds(basisStates[here], numChunks);
+  var ranges : [basisStates._outerDom] [0 ..# bounds.size] range(int);
+  forall (r, i) in zip(ranges, 0 ..) {
+    const localBounds = bounds;
+    r = mergeBoundsToIndexRanges(basisStates.getBlock(i), localBounds);
+  }
+  return ranges;
+}
+
+proc mergeRangesToOffsets(const ref ranges) {
+  const numRanges = ranges[0].size;
+  var offsets : [0 ..# numRanges + 1] int;
+  offsets[0] = 0;
+  for i in 0 ..# numRanges {
+    offsets[i + 1] = offsets[i] + (+ reduce [k in ranges.domain] ranges[k][i].size);
+  }
+  return offsets;
+}
+
+iter parallelMergeRangesIterator(basisStates : BlockVector(uint(64), 1), numChunks : int) {
+  halt("not implemented, but required for compilation :(");
+}
+
+iter parallelMergeRangesIterator(param tag: iterKind, basisStates : BlockVector(uint(64), 1),
+                                 in numChunks : int)
+    where tag == iterKind.standalone {
+  const maxNumChunks = min reduce basisStates._counts;
+  if numChunks > maxNumChunks then
+    numChunks = maxNumChunks;
+
+  const ranges = determineMergeRanges(basisStates, numChunks);
+  const offsets = mergeRangesToOffsets(ranges);
+  const numRanges = offsets.size - 1;
+  const numStates = offsets[numRanges];
+  // logDebug("numStates=" + numStates:string);
+
+  const space = {0 ..# numStates};
+  const dom = space dmapped Block(boundingBox=space);
+
+  coforall rangeIdx in 0 ..# numRanges {
+    const loc = dom.dist.dsiIndexToLocale(offsets[rangeIdx]);
+    on loc {
+      const localRange = offsets[rangeIdx] .. offsets[rangeIdx + 1] - 1;
+      const localChunks = [i in LocaleSpace] ranges[i][rangeIdx];
+      // logDebug("yielding: (" + localRange:string + ", " + localChunks:string + ")");
+      yield (localRange, localChunks);
+    }
+  }
+}
+
+config const statesFromHashedToBlockNumChunks = 7;
+
+proc statesFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1)) {
+  const numStates = + reduce basisStates._counts;
+  const space = {0 ..# numStates};
+  const dom = space dmapped Block(boundingBox=space);
+  var blockBasisStates : [dom] uint(64);
+
+  forall (currentRange, currentChunks) in
+      parallelMergeRangesIterator(basisStates, statesFromHashedToBlockNumChunks) {
+    const currentCounts = [chunk in currentChunks] chunk.size;
+    var localBasisStates = new BlockVector(uint(64), currentCounts);
+    // Get data from remote
+    forall (i, chunk) in zip(LocaleSpace, currentChunks) {
+      localBasisStates._data[i][0 ..# chunk.size] = basisStates._data[i][chunk];
+    }
+
+    // Perform local merge
+    var mergedStates : [0 ..# currentRange.size] uint(64) = noinit;
+    for ((chunkIndex, indexInChunk), offset) in zip(kMergeIndices(localBasisStates), 0..) {
+      mergedStates[offset] = localBasisStates._data[chunkIndex][indexInChunk];
+    }
+    
+    // Copy to remote
+    blockBasisStates[currentRange] = mergedStates;
+  }
+
+  return blockBasisStates;
+}
+
+proc makeBlockDomainForVectors(numVectors, numStates) {
+  const boundingBox = {0 ..# numVectors, 0 ..# numStates};
+  const targetLocales = reshape(Locales, {0 ..# 1, 0 ..# numLocales});
+  const dom : domain(2) dmapped Block(boundingBox=boundingBox, targetLocales=targetLocales) =
+    boundingBox;
+  return dom;
+}
+
+proc vectorsFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1),
+                              const ref vectors : BlockVector(?eltType, 2)) {
+  const numVectors = vectors._innerDom.dim(0).size;
+  const numStates = + reduce basisStates._counts;
+  const dom = makeBlockDomainForVectors(numVectors, numStates);
+  var blockVectors : [dom] eltType;
+
+  forall (currentRange, currentChunks) in
+      parallelMergeRangesIterator(basisStates, statesFromHashedToBlockNumChunks) {
+    const currentCounts = [chunk in currentChunks] chunk.size;
+    var localBasisStates = new BlockVector(uint(64), currentCounts);
+    var localVectors = new BlockVector(eltType, numVectors, currentCounts);
+    // Get data from remote
+    forall (i, chunk) in zip(LocaleSpace, currentChunks) {
+      localBasisStates._data[i][0 ..# chunk.size] = basisStates._data[i][chunk];
+      localVectors._data[i][.., 0 ..# chunk.size] = vectors._data[i][.., chunk];
+    }
+
+    // Perform local merge
+    var mergedVectors : [0 ..# numVectors, 0 ..# currentRange.size] eltType = noinit;
+    for ((chunkIndex, indexInChunk), offset) in zip(kMergeIndices(localBasisStates), 0..) {
+      foreach k in 0 ..# numVectors {
+        mergedVectors[k, offset] = localVectors._data[chunkIndex][k, indexInChunk];
+      }
+    }
+    
+    // Copy to remote
+    blockVectors[.., currentRange] = mergedVectors;
+  }
+
+  return blockVectors;
+}
+
+/*
+proc statesAndVectorsFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1),
+                                       const ref vectors : BlockVector(?eltType, 2)) {
+  const ranges = determineMergeRanges(basisStates, statesFromHashedToBlockNumChunks);
+  const offsets = mergeRangesToOffsets(ranges);
+  const numRanges = offsets.size - 1;
+  const numStates = offsets[numRanges];
+  const numVectors = vectors._innerDom.dim(0).size;
+
+  const statesDomain = {0 ..# numStates} dmapped Block(LocaleSpace);
+  const vectorsDomain = makeBlockDomainForVectors(numVectors, numStates);
+  var blockBasisStates : [statesDomain] uint(64);
+  var blockVectors : [vectorsDomain] eltType;
+
+  coforall rangeIdx in 0 ..# numRanges {
+    const loc = statesDomain.dist.dsiIndexToLocale(offsets[rangeIdx]);
+    on loc {
+      const localRanges = [i in LocaleSpace] ranges[i][rangeIdx];
+      const localCounts = [r in localRanges] r.size;
+      var localBasisStates = new BlockVector(uint(64), localCounts);
+      var localVectors = new BlockVector(eltType, numVectors, localCounts);
+      forall (i, r) in zip(LocaleSpace, localRanges) {
+        // ref v = localBasisStates.getBlock(i);
+        localBasisStates._data[i][0 ..# r.size] = basisStates._data[i][r];
+        localVectors._data[i][.., 0 ..# r.size] = vectors._data[i][.., r];
+      }
+
+      var mergedSize = offsets[rangeIdx + 1] - offsets[rangeIdx];
+      var mergedStates : [0 ..# mergedSize] uint(64) = noinit;
+      var mergedVectors : [0 ..# numVectors, 0 ..# mergedSize] eltType = noinit;
+
+
+      for ((chunkIndex, indexInChunk), offset) in zip(kMergeIndices(localBasisStates), 0..) {
+        mergedStates[offset] = localBasisStates._data[chunkIndex][indexInChunk];
+        foreach k in 0 ..# numVectors {
+          mergedVectors[k, offset] = localVectors._data[chunkIndex][k, indexInChunk];
+        }
+      }
+
+      blockBasisStates[offsets[rangeIdx] .. offsets[rangeIdx + 1] - 1] = mergedStates;
+      blockVectors[.., offsets[rangeIdx] .. offsets[rangeIdx + 1] - 1] = mergedVectors;
+    }
+  }
+  return (blockBasisStates, blockVectors);
+}
+*/
+
+private proc distributionCounts(const ref basisStates : [] uint(64)) {
+  var histogram : [LocaleSpace] int;
+  forall basisState in basisStates with (+ reduce histogram) {
+    const localeIdx = localeIdxOf(basisState);
+    histogram[localeIdx] += 1;
+  }
+
+  const dom = LocaleSpace dmapped Block(LocaleSpace);
+  var histogramDist : [dom] int = histogram;
+  return histogramDist;
+}
+
+
+config const statesFromBlockToHashedNumChunks = 7;
+
+proc statesFromBlockToHashed(const ref basisStates : [] uint(64)) {
+  const counts = distributionCounts(basisStates);
+  var hashedBasisStates = new BlockVector(uint(64), counts);
+
+  coforall loc in Locales with (ref hashedBasisStates) do on loc {
+    ref dest = hashedBasisStates[loc];
+    var offset = 0;
+
+    for r in chunks(0 ..# basisStates.size, statesFromBlockToHashedNumChunks) {
+      // Download from remote
+      var localBasisStates = basisStates[r];
+      // Determine which states to copy
+      var mask : [0 ..# r.size] bool = noinit;
+      forall (x, shouldInclude) in zip(localBasisStates, mask) {
+        shouldInclude = localeIdxOf(x) == loc.id;
+      }
+      // Perform the copy
+      for (x, shouldInclude) in zip(localBasisStates, mask) {
+        if shouldInclude {
+          dest[offset] = x;
+          offset += 1;
+        }
+      }
+    }
+    assert(offset == dest.size);
+  }
+  return hashedBasisStates;
+}
+
+proc vectorsFromBlockToHashed(const ref basisStates : [] uint(64),
+                              const ref vectors : [] ?eltType) {
+  const counts = distributionCounts(basisStates);
+  const numVectors = vectors.dim(0).size;
+  var hashedVectors = new BlockVector(eltType, numVectors, counts);
+
+  coforall loc in Locales with (ref hashedVectors) do on loc {
+    ref dest = hashedVectors[loc];
+    var offset = 0;
+
+    for r in chunks(0 ..# basisStates.size, statesFromBlockToHashedNumChunks) {
+      // Download from remote
+      var localBasisStates = basisStates[r];
+      var localVectors = vectors[.., r];
+      // Determine which states to copy
+      var mask : [0 ..# r.size] bool = noinit;
+      forall (x, shouldInclude) in zip(localBasisStates, mask) {
+        shouldInclude = localeIdxOf(x) == loc.id;
+      }
+      // Perform the copy
+      for i in 0 ..# r.size {
+        const shouldInclude = mask[i];
+        if shouldInclude {
+          foreach k in 0 ..# numVectors {
+            dest[k, offset] = localVectors[k, r.low + i];
+          }
+          offset += 1;
+        }
+      }
+    }
+    assert(offset == dest.dim(1).size);
+  }
+  return hashedVectors;
+}
 
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

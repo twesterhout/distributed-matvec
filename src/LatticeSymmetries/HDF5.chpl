@@ -1,7 +1,6 @@
 module HDF5 {
-  // use CTypes;
-  use CPtr;
-  use SysCTypes;
+  use CTypes;
+  use BlockDist;
 
   use LatticeSymmetries.FFI;
 
@@ -124,4 +123,41 @@ module HDF5 {
       assert(false);
     }
   }
+
+  proc readBasisStatesAsBlocks(filename : string, dataset : string) {
+    const shape = datasetShape(filename, dataset);
+    if shape.size != 1 then
+      halt("expected '" + dataset + "' to be one-dimensional, but it has shape " + shape:string);
+    const totalNumberStates = shape[0];
+  
+    const box = {0 ..# totalNumberStates};
+    const dom = box dmapped Block(box, Locales);
+    var states : [dom] uint(64);
+    coforall loc in Locales do on loc {
+      const indices = states.localSubdomain();
+      // logDebug("my subdomain: " + indices:string);
+      readDatasetChunk(filename, dataset, (indices.low,), states[indices]);
+    }
+    return states;
+  }
+
+  proc readVectorsAsBlocks(filename : string, dataset : string, type eltType = real(64)) {
+    const shape = datasetShape(filename, dataset);
+    if shape.size != 2 then
+      halt("expected '" + dataset + "' to be two-dimensional, but it has shape " + shape:string);
+    const numberVectors = shape[0];
+    const totalNumberStates = shape[1];
+  
+    const boundingBox = {0 ..# numberVectors, 0 ..# totalNumberStates};
+    const targetLocales = reshape(Locales, {0 ..# 1, 0 ..# numLocales});
+    const dom = boundingBox dmapped Block(boundingBox, targetLocales);
+    var vectors : [dom] eltType;
+    coforall loc in Locales do on loc {
+      const indices = vectors.localSubdomain();
+      logDebug("my subdomain: " + indices:string);
+      readDatasetChunk(filename, dataset, indices.low, vectors[indices]);
+    }
+    return vectors;
+  }
+
 }
