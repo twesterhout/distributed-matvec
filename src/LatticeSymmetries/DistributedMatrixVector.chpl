@@ -3,6 +3,8 @@ module DistributedMatrixVector {
 use CTypes;
 use RangeChunk;
 use AllLocalesBarriers;
+use Time;
+use CommDiagnostics;
 
 use FFI;
 use Types;
@@ -46,12 +48,19 @@ private proc localDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y :
   }
 }
 
+config const kEnableDiagnostics : bool = true;
+
 private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                               const ref representatives : [] uint(64),
                               numChunks : int = min(matrixVectorOffDiagonalNumChunks,
                                                     representatives.size)) {
+  startCommDiagnosticsHere();
+  if kEnableDiagnostics then
+    startVerboseCommHere();
+  var timer = new Timer();
+  timer.start();
   const chunkSize = (representatives.size + numChunks - 1) / numChunks;
-  logDebug("Using chunkSize=", chunkSize);
+  // logDebug("Using chunkSize=", chunkSize);
   // Used to calculate the action of matrix on a chunk of basis elements.
   // batchedOperator stores some task-local buffers and a pointer to `matrix`.
   var batchedOperator = new BatchedOperator(matrix, chunkSize);
@@ -67,17 +76,41 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
   // logDebug(representatives.size:string + " vs. " + numChunks:string);
   var ranges : [0 ..# numChunks] range(int) =
     chunks(0 ..# representatives.size, numChunks);
-  forall r in ranges
-      with (in batchedOperator, in staging) {
-    logDebug("Processing ", r, " ...");
+  // forall r in ranges.these(tasksPerLocale=4)
+  var batchedOpTimer = new Timer();
+  var stagingAddTimer = new Timer();
+  var stagingFlushTimer = new Timer();
+  var drainTimer = new Timer();
+  for r in ranges {
+      // with (in batchedOperator, in staging) {
+    // logDebug("Processing ", r, " ...");
+    batchedOpTimer.start();
     const (basisStatesPtr, coeffsPtr, offsetsPtr) = batchedOperator.computeOffDiag(
         r.size, c_const_ptrTo(representatives[r.low]), c_const_ptrTo(x[r.low]));
+    batchedOpTimer.stop();
     const n = offsetsPtr[r.size];
+    stagingAddTimer.start();
     staging.add(n, basisStatesPtr, coeffsPtr);
+    stagingAddTimer.stop();
+    stagingFlushTimer.start();
     staging.flush();
+    stagingFlushTimer.stop();
   }
+  drainTimer.start();
   queue!.drain();
+  drainTimer.stop();
+  logDebug("batchedOperator:   ", batchedOpTimer.elapsed());
+  logDebug("stagingAddTimer:   ", stagingAddTimer.elapsed());
+  logDebug("stagingFlushTimer: ", stagingFlushTimer.elapsed());
+  logDebug("drainTimer:        ", drainTimer.elapsed());
+  logDebug("localProcess:      ", queue!.localProcessTimings.read());
+
   allLocalesBarrier.barrier();
+  timer.stop();
+  logDebug(timer.elapsed());
+  stopCommDiagnosticsHere();
+  if kEnableDiagnostics then
+    stopVerboseCommHere();
 }
 
 private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
@@ -86,8 +119,16 @@ private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref
   assert(x.locale == here);
   assert(y.locale == here);
   assert(representatives.locale == here);
+  // var timer = new Timer();
+  // timer.start();
   localDiagonal(matrix, x, y, representatives);
+  // timer.stop();
+  // logDebug("diagonal: ", timer.elapsed());
+  // timer.clear();
+  // timer.start();
   localOffDiagonal(matrix, x, y, representatives);
+  // timer.stop();
+  // logDebug("off-diag: ", timer.elapsed());
 }
 
 proc matrixVectorProduct(matrixFilename : string,
@@ -103,6 +144,7 @@ proc matrixVectorProduct(matrixFilename : string,
     // myY += 1;
     localMatrixVector(myMatrix, myX, myY, myBasisStates);
   }
+  printCommDiagnosticsTable();
 }
 
 /*

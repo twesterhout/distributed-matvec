@@ -2,6 +2,7 @@ module CommunicationQueue {
 
 use CTypes;
 use BlockDist;
+use Time;
 
 use FFI;
 use Types;
@@ -24,6 +25,7 @@ class CommunicationQueue {
   var _locks : [LocaleSpace] sync bool;
   var _basisPtr : c_ptr(Basis);
   var _accessorPtr : c_ptr(ConcurrentAccessor(eltType));
+  var localProcessTimings : atomic real(64);
 
   proc init(const ref basis : Basis,
             ref accessor : ConcurrentAccessor(?t),
@@ -44,6 +46,8 @@ class CommunicationQueue {
   proc localProcess(count : int,
                     sigmas : c_ptr(uint(64)),
                     coeffs : c_ptr(?t)) {
+    var timer = new Timer();
+    timer.start();
     // logDebug("localProcess...");
     // logDebug(_basisPtr.locale:string + " " + _basisPtr:string);
     assert(_basisPtr != nil);
@@ -61,6 +65,8 @@ class CommunicationQueue {
       // when the size of indices is 0.
       if count == 0 {
         // logDebug("end localProcess!");
+        timer.stop();
+        localProcessTimings.add(timer.elapsed());
         return;
       }
 
@@ -86,6 +92,8 @@ class CommunicationQueue {
                   else halt("invalid index");
       }
     }
+    timer.stop();
+    localProcessTimings.add(timer.elapsed());
     // logDebug("end localProcess!");
   }
   inline proc localProcess(const ref sigmas : [] uint(64),
@@ -104,11 +112,11 @@ class CommunicationQueue {
     }
     const ref sigmas = _basisStates[localeIdx][0 ..# size];
     const ref cs = _coeffs[localeIdx][0 ..# size];
-    var copyComplete$ : single bool;
-    begin on Locales[localeIdx] {
+    // var copyComplete$ : single bool;
+    on Locales[localeIdx] {
       const basisStates : [0 ..# size] uint(64) = sigmas;
       const coeffs : [0 ..# size] cs.eltType = cs;
-      copyComplete$.writeEF(true);
+      // copyComplete$.writeEF(true);
       ref queue = globalAllQueues[here.id]; // :c_ptr(owned CommunicationQueue(eltType));
       // if queue == nil then
       //   halt("oops: queuePtr is null");
@@ -118,7 +126,7 @@ class CommunicationQueue {
     }
     // We need to wait for the remote copy to complete before we can reuse
     // `sigmas` and `cs`.
-    copyComplete$.readFF();
+    // copyComplete$.readFF();
     size = 0;
     // logDebug("end processOnRemote!");
   }
