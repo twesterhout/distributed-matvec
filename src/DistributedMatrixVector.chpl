@@ -3,6 +3,7 @@ module DistributedMatrixVector {
 use CTypes;
 use RangeChunk;
 use AllLocalesBarriers;
+use Time;
 
 use FFI;
 use ForeignTypes;
@@ -50,6 +51,7 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
                               const ref representatives : [] uint(64),
                               numChunks : int = min(matrixVectorOffDiagonalNumChunks,
                                                     representatives.size)) {
+  var timer = new Timer();
   const chunkSize = (representatives.size + numChunks - 1) / numChunks;
   logDebug("Using chunkSize=", chunkSize);
   // Used to calculate the action of matrix on a chunk of basis elements.
@@ -62,22 +64,28 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
   ref queue = globalAllQueues[here.id];
   var staging = new StagingBuffers();
   allLocalesBarrier.barrier();
+  timer.start();
   // writeln(globalAllQueues);
 
   // logDebug(representatives.size:string + " vs. " + numChunks:string);
   var ranges : [0 ..# numChunks] range(int) =
     chunks(0 ..# representatives.size, numChunks);
-  forall r in ranges
-      with (in batchedOperator, in staging) {
-    logDebug("Processing ", r, " ...");
+  forall r in ranges with (in batchedOperator, in staging) {
+    // logDebug("Processing ", r, " ...");
     const (basisStatesPtr, coeffsPtr, offsetsPtr) = batchedOperator.computeOffDiag(
         r.size, c_const_ptrTo(representatives[r.low]), c_const_ptrTo(x[r.low]));
     const n = offsetsPtr[r.size];
+    // logDebug("Adding ...");
     staging.add(n, basisStatesPtr, coeffsPtr);
+    // logDebug("Flushing ...");
     staging.flush();
   }
+  // logDebug("Draining ...");
   queue!.drain();
   allLocalesBarrier.barrier();
+  timer.stop();
+  logDebug("Spent ", timer.elapsed(), " in the body of localOffDiagonal");
+  logDebug("Processed ", queue!.numRemoteCalls.read(), " remote jobs");
 }
 
 private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,

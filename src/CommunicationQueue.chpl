@@ -7,7 +7,7 @@ use FFI;
 use ForeignTypes;
 use ConcurrentAccessor;
 
-config const communicationQueueBufferSize = 1000;
+config const communicationQueueBufferSize = 10000;
 config const stagingBuffersBufferSize = 100;
 
 var globalAllQueues : [LocaleSpace dmapped Block(LocaleSpace)]
@@ -24,6 +24,7 @@ class CommunicationQueue {
   var _locks : [LocaleSpace] sync bool;
   var _basisPtr : c_ptr(Basis);
   var _accessorPtr : c_ptr(ConcurrentAccessor(eltType));
+  var numRemoteCalls : atomic int;
 
   proc init(const ref basis : Basis,
             ref accessor : ConcurrentAccessor(?t),
@@ -104,21 +105,22 @@ class CommunicationQueue {
     }
     const ref sigmas = _basisStates[localeIdx][0 ..# size];
     const ref cs = _coeffs[localeIdx][0 ..# size];
-    var copyComplete$ : single bool;
-    begin on Locales[localeIdx] {
+    // var copyComplete$ : single bool;
+    on Locales[localeIdx] {
       const basisStates : [0 ..# size] uint(64) = sigmas;
       const coeffs : [0 ..# size] cs.eltType = cs;
-      copyComplete$.writeEF(true);
+      // copyComplete$.writeEF(true);
       ref queue = globalAllQueues[here.id]; // :c_ptr(owned CommunicationQueue(eltType));
       // if queue == nil then
       //   halt("oops: queuePtr is null");
-      // logDebug("Calling localProcess on " + queuePtr:string);
+      // logDebug("Calling localProcess ...");
       // logDebug("  " + queuePtr.deref()._basisPtr:string);
+      queue!.numRemoteCalls.add(1);
       queue!.localProcess(basisStates, coeffs);
     }
     // We need to wait for the remote copy to complete before we can reuse
     // `sigmas` and `cs`.
-    copyComplete$.readFF();
+    // copyComplete$.readFF();
     size = 0;
     // logDebug("end processOnRemote!");
   }
