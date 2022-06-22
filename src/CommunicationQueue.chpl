@@ -4,7 +4,7 @@ use CTypes;
 use BlockDist;
 
 use FFI;
-use Types;
+use ForeignTypes;
 use ConcurrentAccessor;
 
 config const communicationQueueBufferSize = 1000;

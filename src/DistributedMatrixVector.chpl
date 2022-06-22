@@ -5,7 +5,7 @@ use RangeChunk;
 use AllLocalesBarriers;
 
 use FFI;
-use Types;
+use ForeignTypes;
 use ConcurrentAccessor;
 use BatchedOperator;
 use CommunicationQueue;

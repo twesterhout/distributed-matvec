@@ -1,4 +1,4 @@
-module Types {
+module ForeignTypes {
   use FFI;
 
   use CTypes;

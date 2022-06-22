@@ -1,6 +1,7 @@
 module MatrixVectorProduct {
   use FFI;
-  use Types;
+  use ForeignTypes;
+
   use CTypes;
   use RangeChunk;
   use DynamicIters;

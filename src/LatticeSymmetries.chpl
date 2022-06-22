@@ -1,7 +1,7 @@
 module LatticeSymmetries {
   public use FFI;
   public use HDF5;
-  public use Types;
+  public use ForeignTypes;
   public use StatesEnumeration;
   public use MatrixVectorProduct;
   public use DistributedMatrixVector;

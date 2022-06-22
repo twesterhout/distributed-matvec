@@ -2,7 +2,7 @@ module BatchedOperator {
 
 use CTypes;
 use FFI;
-use Types;
+use ForeignTypes;
 
 // TODO: this is currently implemented inefficiently
 private proc localCompressMultiply(batchSize : int, numberTerms : int,

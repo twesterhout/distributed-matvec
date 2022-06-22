@@ -1,7 +1,7 @@
 module StatesEnumeration {
 
 use FFI;
-use Types;
+use ForeignTypes;
 use Vector;
 
 use BitOps;

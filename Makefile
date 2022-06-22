@@ -15,16 +15,16 @@ PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -lopenblas -lm -lgomp -lpth
 
 # MODULES = src/ApplyOperator.chpl src/StatesEnumeration.chpl src/helper.c
 MODULES = src/LatticeSymmetries.chpl \
-	  src/LatticeSymmetries/FFI.chpl \
-	  src/LatticeSymmetries/HDF5.chpl \
-	  src/LatticeSymmetries/Types.chpl \
-	  src/LatticeSymmetries/StatesEnumeration.chpl \
-	  src/LatticeSymmetries/ConcurrentAccessor.chpl \
-	  src/LatticeSymmetries/BatchedOperator.chpl \
-	  src/LatticeSymmetries/CommunicationQueue.chpl \
-	  src/LatticeSymmetries/DistributedMatrixVector.chpl \
-	  src/LatticeSymmetries/MultiwayMerge.chpl \
-	  src/LatticeSymmetries/helper.c
+	  src/FFI.chpl \
+	  src/HDF5.chpl \
+	  src/ForeignTypes.chpl \
+	  src/StatesEnumeration.chpl \
+	  src/ConcurrentAccessor.chpl \
+	  src/BatchedOperator.chpl \
+	  src/CommunicationQueue.chpl \
+	  src/DistributedMatrixVector.chpl \
+	  src/MultiwayMerge.chpl \
+	  src/helper.c
 
 .PHONY: all
 all: test examples
