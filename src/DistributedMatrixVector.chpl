@@ -47,45 +47,80 @@ private proc localDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y :
   }
 }
 
+var globalPtrStore : [LocaleSpace] (c_ptr(Basis), c_ptr(ConcurrentAccessor(real(64))));
+
 private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                               const ref representatives : [] uint(64),
                               numChunks : int = min(matrixVectorOffDiagonalNumChunks,
                                                     representatives.size)) {
   var timer = new Timer();
+  var computeOffDiagTime : atomic real;
+  var stagingAddTime : atomic real;
+  var stagingFlushTime : atomic real;
+  var queueDrainTime : atomic real;
+
   const chunkSize = (representatives.size + numChunks - 1) / numChunks;
   logDebug("Using chunkSize=", chunkSize);
   // Used to calculate the action of matrix on a chunk of basis elements.
   // batchedOperator stores some task-local buffers and a pointer to `matrix`.
-  var batchedOperator = new BatchedOperator(matrix, chunkSize);
+  // var batchedOperator = new BatchedOperator(matrix, chunkSize);
   // Used to then process the matrix elements.
   // logDebug("new ConcurrentAccessor: " + y.locale:string);
   var accessor = new ConcurrentAccessor(y);
-  globalAllQueues[here.id] = new CommunicationQueue(matrix.basis, accessor);
-  ref queue = globalAllQueues[here.id];
-  var staging = new StagingBuffers();
+  globalPtrStore[here.id] = (c_const_ptrTo(matrix.basis), c_ptrTo(accessor));
   allLocalesBarrier.barrier();
   timer.start();
+
+  var queue = new CommunicationQueue(eltType, globalPtrStore);
   // writeln(globalAllQueues);
 
   // logDebug(representatives.size:string + " vs. " + numChunks:string);
   var ranges : [0 ..# numChunks] range(int) =
     chunks(0 ..# representatives.size, numChunks);
-  forall r in ranges with (in batchedOperator, in staging) {
+  forall r in ranges with (ref queue,
+                           var batchedOperator = new BatchedOperator(matrix, chunkSize),
+                           var staging = new StagingBuffers(queue)) {
     // logDebug("Processing ", r, " ...");
+
+    var timer = new Timer();
+    timer.start();
     const (basisStatesPtr, coeffsPtr, offsetsPtr) = batchedOperator.computeOffDiag(
         r.size, c_const_ptrTo(representatives[r.low]), c_const_ptrTo(x[r.low]));
     const n = offsetsPtr[r.size];
-    // logDebug("Adding ...");
+    timer.stop();
+    computeOffDiagTime.add(timer.elapsed());
+    timer.clear();
+
+    timer.start();
     staging.add(n, basisStatesPtr, coeffsPtr);
-    // logDebug("Flushing ...");
+    timer.stop();
+    stagingAddTime.add(timer.elapsed());
+    timer.clear();
+
+    timer.start();
     staging.flush();
+    timer.stop();
+    stagingFlushTime.add(timer.elapsed());
   }
   // logDebug("Draining ...");
-  queue!.drain();
+  var queueTimer = new Timer();
+  queueTimer.start();
+  queue.drain();
+  queueTimer.stop();
+  queueDrainTime.add(queueTimer.elapsed());
+
   allLocalesBarrier.barrier();
   timer.stop();
   logDebug("Spent ", timer.elapsed(), " in the body of localOffDiagonal");
-  logDebug("Processed ", queue!.numRemoteCalls.read(), " remote jobs");
+  logDebug("Spent ", computeOffDiagTime, " in computeOffDiag");
+  logDebug("Spent ", stagingAddTime, " in staging.add");
+  logDebug("Spent ", stagingFlushTime, " in staging.flush");
+  logDebug("Spent ", queueDrainTime, " in queue.drain");
+  logDebug("Spent ", queue.flushBufferTime, " in queue._flushBuffer");
+  logDebug("Spent ", queue.enqueueUnsafeTime, " in queue._enqueueUnsafe");
+  logDebug("Spent ", queue.enqueueTime, " in queue.enqueue");
+  logDebug("Spent ", queue.localProcessTime, " in localProcess");
+  // logDebug("Processed ", queue!.numRemoteCalls.read(), " remote jobs");
 }
 
 private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,

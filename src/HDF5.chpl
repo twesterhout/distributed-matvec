@@ -154,7 +154,7 @@ module HDF5 {
     var vectors : [dom] eltType;
     coforall loc in Locales do on loc {
       const indices = vectors.localSubdomain();
-      logDebug("my subdomain: " + indices:string);
+      // logDebug("my subdomain: " + indices:string);
       readDatasetChunk(filename, dataset, indices.low, vectors[indices]);
     }
     return vectors;

@@ -46,7 +46,7 @@ record BatchedOperator {
     this._numberOffDiagTerms = matrix.numberOffDiagTerms();
     const numberTerms = max(_numberOffDiagTerms, 1);
     this._dom = {0 ..# (batchSize * (numberTerms + 1))};
-    logDebug("BatchedOperator._dom = ", this._dom);
+    // logDebug("BatchedOperator._dom = ", this._dom);
   }
   proc init=(const ref other : BatchedOperator) {
     assert(other.locale == here);

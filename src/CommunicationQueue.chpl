@@ -2,177 +2,201 @@ module CommunicationQueue {
 
 use CTypes;
 use BlockDist;
+use Time;
 
 use FFI;
 use ForeignTypes;
 use ConcurrentAccessor;
 
-config const communicationQueueBufferSize = 10000;
+config const communicationQueueBufferSize = 32000;
 config const stagingBuffersBufferSize = 100;
 
-var globalAllQueues : [LocaleSpace dmapped Block(LocaleSpace)]
-                        owned CommunicationQueue(real(64))?;
+// inline proc getAddr(const ref p): c_ptr(p.type) {
+//   // TODO can this use c_ptrTo?
+//   return __primitive("_wide_get_addr", p): c_ptr(p.type);
+// }
+
+inline proc GET(addr, node, rAddr, size) {
+  __primitive("chpl_comm_get", addr, node, rAddr, size);
+}
+
+inline proc PUT(addr, node, rAddr, size) {
+  __primitive("chpl_comm_put", addr, node, rAddr, size);
+}
+
+proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccessor(?coeffType)),
+                  basisStates : c_ptr(uint(64)), coeffs : c_ptr(coeffType), size : int) {
+  assert(basisPtr != nil);
+  assert(accessorPtr != nil);
+
+  // count == 0 has to be handled separately because c_ptrTo(indices) fails
+  // when the size of indices is 0.
+  if size == 0 then return;
+
+  // TODO: is the fact that we're allocating `indices` over and over again
+  // okay performance-wise?
+  // logDebug("ls_hs_state_index ...");
+  var indices : [0 ..# size] int = noinit;
+  ls_hs_state_index(basisPtr.deref().payload, size, basisStates, 1, c_ptrTo(indices), 1);
+  ref accessor = accessorPtr.deref();
+  foreach k in 0 ..# size {
+    const i = indices[k];
+    const c = coeffs[k];
+    // Importantly, the user could have made a mistake and given us an
+    // operator which does not respect the basis symmetries. Then we could
+    // have that a |σ⟩ was generated that doesn't belong to our basis. In
+    // this case, we should throw an error.
+    if i >= 0 then accessor.localAdd(i, c);
+              else halt("invalid index");
+  }
+}
+// inline proc localProcess(const ref sigmas : [] uint(64),
+//                          const ref coeffs : [] complex(128)) {
+//   // logDebug("localProcess(" + sigmas:string + ", " + coeffs:string + ") ...");
+//   assert(sigmas.size == coeffs.size);
+//   localProcess(sigmas.size, c_const_ptrTo(sigmas), c_const_ptrTo(coeffs));
+// }
+
 
 // Handles the non-trivial communication of matrix elements between locales
 class CommunicationQueue {
-  type eltType;
-  var _bufferSize : int;
-  var _dom : domain(1);
+  type coeffType;
+  const _dom : domain(1) = {0 ..# communicationQueueBufferSize};
+
   var _sizes : [LocaleSpace] int;
   var _basisStates : [LocaleSpace] [_dom] uint(64);
-  var _coeffs : [LocaleSpace] [_dom] complex(128);
-  var _locks : [LocaleSpace] sync bool;
-  var _basisPtr : c_ptr(Basis);
-  var _accessorPtr : c_ptr(ConcurrentAccessor(eltType));
-  var numRemoteCalls : atomic int;
+  var _coeffs : [LocaleSpace] [_dom] coeffType;
+  var _remoteBuffers : [LocaleSpace] RemoteBuffer(coeffType);
 
-  proc init(const ref basis : Basis,
-            ref accessor : ConcurrentAccessor(?t),
-            bufferSize : int = communicationQueueBufferSize) {
-    // logDebug("CommunicationQueue.init ...");
-    this.eltType = t;
-    this._bufferSize = bufferSize;
-    this._dom = {0 ..# _bufferSize};
-    this._sizes = 0;
-    this._basisPtr = c_const_ptrTo(basis);
-    this._accessorPtr = c_ptrTo(accessor);
-    // logDebug(_basisPtr.locale:string + " " + _basisPtr:string);
+  var _bases : [LocaleSpace] c_ptr(Basis);
+  var _accessors : [LocaleSpace] c_ptr(ConcurrentAccessor(coeffType));
+
+  var _locks : [LocaleSpace] sync bool;
+  // var _basisPtr : c_ptr(Basis);
+  // var _accessorPtr : c_ptr(ConcurrentAccessor(eltType));
+  // var numRemoteCalls : atomic int;
+  var flushBufferTime : atomic real;
+  var enqueueUnsafeTime : atomic real;
+  var enqueueTime : atomic real;
+  var localProcessTime : atomic real;
+
+  proc init(type coeffType, ptrStore : [] (c_ptr(Basis), c_ptr(ConcurrentAccessor(coeffType)))) {
+    this.coeffType = coeffType;
+    this._remoteBuffers = [i in LocaleSpace] new RemoteBuffer(coeffType, _dom.size, i);
+    this._bases = [i in LocaleSpace] ptrStore[i][0];
+    this._accessors = [i in LocaleSpace] ptrStore[i][1];
+    complete();
   }
 
   inline proc _lock(localeIdx : int) { _locks[localeIdx].writeEF(true); }
   inline proc _unlock(localeIdx : int) { _locks[localeIdx].readFE(); }
 
-  proc localProcess(count : int,
-                    sigmas : c_ptr(uint(64)),
-                    coeffs : c_ptr(?t)) {
-    // logDebug("localProcess...");
-    // logDebug(_basisPtr.locale:string + " " + _basisPtr:string);
-    assert(_basisPtr != nil);
-    if _basisPtr.deref().isStateIndexIdentity() {
-      // Simple case when sigmas actually correspond to indices
-      ref accessor = _accessorPtr.deref();
-      foreach k in 0 ..# count {
-        const i = sigmas[k]:int;
-        const c = coeffs[k]:eltType;
-        accessor.localAdd(i, c);
-      }
-    }
-    else {
-      // count == 0 has to be handled separately because c_ptrTo(indices) fails
-      // when the size of indices is 0.
-      if count == 0 {
-        // logDebug("end localProcess!");
-        return;
-      }
+  proc _flushBuffer(localeIdx : int, release : bool = false) {
+    var timer = new Timer();
+    timer.start();
 
-      // We do not know the indices of `sigmas` yet:
-      // TODO: is the fact that we're allocating `indices` over and over again
-      // okay performance-wise?
-      // logDebug("ls_hs_state_index ...");
-      var indices : [0 ..# count] int = noinit;
-      ls_hs_state_index(
-        _basisPtr.deref().payload, count,
-        sigmas, 1,
-        c_ptrTo(indices), 1);
-      // logDebug("end ls_hs_state_index!");
-      ref accessor = _accessorPtr.deref();
-      foreach k in 0 ..# count {
-        const i = indices[k];
-        const c = coeffs[k]:eltType;
-        // Importantly, the user could have made a mistake and given us an
-        // operator which does not respect the basis symmetries. Then we could
-        // have that a |σ⟩ was generated that doesn't belong to our basis. In
-        // this case, we should throw an error.
-        if i >= 0 then accessor.localAdd(i, c:eltType);
-                  else halt("invalid index");
-      }
-    }
-    // logDebug("end localProcess!");
-  }
-  inline proc localProcess(const ref sigmas : [] uint(64),
-                           const ref coeffs : [] complex(128)) {
-    // logDebug("localProcess(" + sigmas:string + ", " + coeffs:string + ") ...");
-    assert(sigmas.size == coeffs.size);
-    localProcess(sigmas.size, c_const_ptrTo(sigmas), c_const_ptrTo(coeffs));
-  }
-
-  proc processOnRemote(localeIdx : int) {
-    // logDebug("processOnRemote(" + localeIdx:string + ") ...");
     ref size = _sizes[localeIdx];
-    if size == 0 {
-      // logDebug("end processOnRemote!");
+    // logDebug("processOnRemote(" + localeIdx:string + ") ...");
+    const mySize = size;
+    if mySize == 0 {
+      if release then _unlock(localeIdx);
+
+      timer.stop();
+      flushBufferTime.add(timer.elapsed());
       return;
     }
-    const ref sigmas = _basisStates[localeIdx][0 ..# size];
-    const ref cs = _coeffs[localeIdx][0 ..# size];
-    // var copyComplete$ : single bool;
+
+    ref remoteBuffer = _remoteBuffers[localeIdx];
+    remoteBuffer.put(_basisStates[localeIdx], _coeffs[localeIdx], mySize);
+    size = 0;
+
+    if release then _unlock(localeIdx);
+    const remoteBasis = _bases[localeIdx];
+    const remoteAccessor = _accessors[localeIdx];
+    const remoteBasisStates = remoteBuffer.basisStates;
+    const remoteCoeffs = remoteBuffer.coeffs;
     on Locales[localeIdx] {
-      const basisStates : [0 ..# size] uint(64) = sigmas;
-      const coeffs : [0 ..# size] cs.eltType = cs;
+      // const basisStates : [0 ..# size] uint(64) = sigmas;
+      // const coeffs : [0 ..# size] cs.eltType = cs;
       // copyComplete$.writeEF(true);
-      ref queue = globalAllQueues[here.id]; // :c_ptr(owned CommunicationQueue(eltType));
+      // ref queue = globalAllQueues[here.id]; // :c_ptr(owned CommunicationQueue(eltType));
       // if queue == nil then
       //   halt("oops: queuePtr is null");
       // logDebug("Calling localProcess ...");
       // logDebug("  " + queuePtr.deref()._basisPtr:string);
-      queue!.numRemoteCalls.add(1);
-      queue!.localProcess(basisStates, coeffs);
+      // queue!.numRemoteCalls.add(1);
+      // queue!.localProcess(basisStates, coeffs);
+      localProcess(remoteBasis, remoteAccessor, remoteBasisStates, remoteCoeffs, mySize);
     }
     // We need to wait for the remote copy to complete before we can reuse
     // `sigmas` and `cs`.
     // copyComplete$.readFF();
-    size = 0;
     // logDebug("end processOnRemote!");
+    timer.stop();
+    flushBufferTime.add(timer.elapsed());
   }
 
-  inline proc _enqueueUnsafe(localeIdx : int, count : int,
-                             sigmas : c_ptr(uint(64)), coeffs : c_ptr(?t)) {
-    // logDebug("_enqueueUnsafe...");
+  inline proc _enqueueUnsafe(localeIdx : int,
+                             count : int,
+                             basisStates : c_ptr(uint(64)),
+                             coeffs : c_ptr(coeffType),
+                             release : bool) {
+    var timer = new Timer();
+    timer.start();
+
     ref offset = _sizes[localeIdx];
     assert(offset + count <= _dom.size);
-    // TODO: Why a loop here? Can't we have a simple memcpy call?
-    foreach i in 0 ..# count {
-      _basisStates[localeIdx][offset + i] = sigmas[i];
-      _coeffs[localeIdx][offset + i] = coeffs[i]:eltType;
-    }
+    c_memcpy(c_ptrTo(_basisStates[localeIdx][offset]), basisStates, count:c_size_t * c_sizeof(uint(64)));
+    c_memcpy(c_ptrTo(_coeffs[localeIdx][offset]), coeffs, count:c_size_t * c_sizeof(coeffType));
     offset += count;
     // So far, everything was done locally. Only `processOnRemote` involves
     // communication.
     if offset == _dom.size then
-      processOnRemote(localeIdx);
-    // logDebug("end _enqueueUnsafe!");
+      _flushBuffer(localeIdx, release);
+    else
+      if release then _unlock(localeIdx);
+
+    timer.stop();
+    enqueueUnsafeTime.add(timer.elapsed());
   }
 
-  // Enqueue elements which need to be added to the output vector |y⟩. This
-  // function effectively performs |y⟩ += cᵢ|σᵢ⟩ for each cᵢ in `coeffs` and σᵢ
-  // in `sigmas` (`i` is in `0 ..# count`). `localeIdx` specifies the locale to
-  // which `sigmas` and `coeffs` should be sent.
-  proc enqueue(localeIdx : int, in count : int,
-               in sigmas : c_ptr(uint(64)), in coeffs : c_ptr(?t)) {
-    // logDebug("enqueue...");
+  proc enqueue(localeIdx : int,
+               in count : int,
+               in basisStates : c_ptr(uint(64)),
+               in coeffs : c_ptr(coeffType)) {
+    var timer = new Timer();
+    timer.start();
+
     if localeIdx == here.id {
-      localProcess(count, sigmas, coeffs);
+      var t2 = new Timer();
+      t2.start();
+      localProcess(_bases[localeIdx], _accessors[localeIdx], basisStates, coeffs, count);
+      t2.stop();
+      localProcessTime.add(t2.elapsed());
+
+      timer.stop();
+      enqueueTime.add(timer.elapsed());
       return;
     }
-    _lock(localeIdx);
-    // var offset = 0;
+
     while count > 0 {
+      _lock(localeIdx);
       const remaining = min(_dom.size - _sizes[localeIdx], count);
-      _enqueueUnsafe(localeIdx, remaining, sigmas, coeffs);
+      _enqueueUnsafe(localeIdx, remaining, basisStates, coeffs, release=false);
+      _unlock(localeIdx);
       count -= remaining;
-      sigmas += remaining;
+      basisStates += remaining;
       coeffs += remaining;
     }
-    _unlock(localeIdx);
-    // logDebug("end enqueue!");
+    timer.stop();
+    enqueueTime.add(timer.elapsed());
   }
 
   proc drain() {
-    forall localeIdx in LocaleSpace {
+    for localeIdx in LocaleSpace {
       // if _sizes[localeIdx] > 0 {
       _lock(localeIdx);
-      processOnRemote(localeIdx);
-      _unlock(localeIdx);
+      _flushBuffer(localeIdx, release=true);
       // }
     }
     // Check
@@ -181,57 +205,85 @@ class CommunicationQueue {
   }
 }
 
+record RemoteBuffer {
+  type coeffType;
+  var size : int;
+  var localeIdx : int;
+  var basisStates : c_ptr(uint(64));
+  var coeffs : c_ptr(coeffType);
+
+  proc postinit() {
+    const rvf_size = size;
+    on Locales[localeIdx] {
+      basisStates = c_malloc(uint(64), rvf_size);
+      coeffs = c_malloc(coeffType, rvf_size);
+    }
+  }
+
+  proc put(localBasisStates : [] uint(64),
+           localCoeffs : [] coeffType,
+           size : int) {
+    assert(size <= this.size);
+    PUT(c_ptrTo(localBasisStates[0]), localeIdx, basisStates, size:c_size_t * c_sizeof(uint(64)));
+    PUT(c_ptrTo(localCoeffs[0]), localeIdx, coeffs, size:c_size_t * c_sizeof(coeffType));
+  }
+
+  proc deinit() {
+    if basisStates != nil {
+      const rvf_basisStates = basisStates;
+      const rvf_coeffs = coeffs;
+      on Locales[localeIdx] {
+        assert(rvf_basisStates != nil && rvf_coeffs != nil);
+        c_free(rvf_basisStates);
+        c_free(rvf_coeffs);
+      }
+    }
+  }
+}
+
 record StagingBuffers {
-  type eltType;
-  var _capacity : int;
+  type coeffType;
+  const _capacity : int = stagingBuffersBufferSize;
   var _sizes : [0 ..# numLocales] int;
   var _basisStates : [0 ..# numLocales, 0 ..# _capacity] uint(64);
-  var _coeffs : [0 ..# numLocales, 0 ..# _capacity] eltType;
-  // var _magic : c_ptr(owned CommunicationQueue(eltType));
+  var _coeffs : [0 ..# numLocales, 0 ..# _capacity] coeffType;
+  var _queue : c_ptr(owned CommunicationQueue(coeffType));
 
-  proc init(// ref magic : CommunicationQueue(?t),
-            bufferSize : int = stagingBuffersBufferSize) {
-    // logDebug("StagingBuffers.init ...");
-    this.eltType = real(64);
-    this._capacity = bufferSize;
-    this._sizes = 0;
-    // this._magic = c_ptrTo(magic);
+  proc init(ref queue : owned CommunicationQueue(?t)) {
+    this.coeffType = t;
+    this._queue = c_ptrTo(queue);
   }
+
   proc init=(const ref other : StagingBuffers) {
     assert(other.locale == here); // we do not support assignment from remote
-    this.eltType = other.eltType;
+    this.coeffType = other.coeffType;
     this._capacity = other._capacity;
+    this._queue = other._queue;
     complete();
-    // this._magic = other._magic;
     foreach i in LocaleSpace {
       const n = other._sizes[i];
       if n != 0 {
         this._sizes[i] = n;
-        // TODO: Are these again crazy slow? Do we care?
-        this._basisStates[i, 0 ..# n] = other._basisStates[i, 0 ..# n];
-        this._coeffs[i, 0 ..# n] = other._coeffs[i, 0 ..# n];
+        c_memcpy(c_ptrTo(this._basisStates[i, 0]), c_const_ptrTo(other._basisStates[i, 0]),
+                 n:c_size_t * c_sizeof(uint(64)));
+        c_memcpy(c_ptrTo(this._coeffs[i, 0]), c_const_ptrTo(other._coeffs[i, 0]),
+                 n:c_size_t * c_sizeof(coeffType));
       }
     }
   }
 
-  // Push all elements remaining in staging buffers for locale 'localIdx' to
-  // '_magic'.
   proc flush(localeIdx : int) {
-    // logDebug("flush(" + localeIdx:string + ") ...");
-    globalAllQueues[here.id]!.enqueue(localeIdx, _sizes[localeIdx],
-                                      c_const_ptrTo(_basisStates[localeIdx, 0]),
-                                      c_const_ptrTo(_coeffs[localeIdx, 0]));
-    // logDebug("end flush!");
+    _queue.deref().enqueue(localeIdx, _sizes[localeIdx],
+                   c_const_ptrTo(_basisStates[localeIdx, 0]),
+                   c_const_ptrTo(_coeffs[localeIdx, 0]));
     _sizes[localeIdx] = 0;
   }
-  // Push all elements remaining in staging buffers to '_magic'
   proc flush() {
     foreach localeIdx in LocaleSpace do
       flush(localeIdx);
   }
 
-  proc add(localeIdx : int, basisState : uint(64), coeff : eltType) {
-    // logDebug("add(" + localeIdx:string + ", " + basisState:string + ", " + coeff:string + ") ...");
+  proc add(localeIdx : int, basisState : uint(64), coeff : coeffType) {
     ref n = _sizes[localeIdx];
     assert(n < _capacity);
     _basisStates[localeIdx, n] = basisState;
@@ -247,8 +299,7 @@ record StagingBuffers {
     // computing hashes should make it compute bound.
     for i in 0 ..# batchSize {
       const localeIdx = localeIdxOf(basisStatesPtr[i]);
-      // TODO: what about conversions from/to complex(128)?
-      add(localeIdx, basisStatesPtr[i], coeffsPtr[i]:eltType);
+      add(localeIdx, basisStatesPtr[i], coeffsPtr[i]:coeffType);
     }
   }
 }
