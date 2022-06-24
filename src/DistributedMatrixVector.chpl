@@ -77,6 +77,8 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
   // logDebug(representatives.size:string + " vs. " + numChunks:string);
   var ranges : [0 ..# numChunks] range(int) =
     chunks(0 ..# representatives.size, numChunks);
+  // var frequency : atomic real;
+  // var norm : atomic int;
   forall r in ranges with (ref queue,
                            var batchedOperator = new BatchedOperator(matrix, chunkSize),
                            var staging = new StagingBuffers(queue)) {
@@ -101,6 +103,11 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
     staging.flush();
     timer.stop();
     stagingFlushTime.add(timer.elapsed());
+
+    // if staging.totalCount > 0 {
+    //   frequency.add(staging.sameCount:real / staging.totalCount:real);
+    //   norm.add(1);
+    // }
   }
   // logDebug("Draining ...");
   var queueTimer = new Timer();
@@ -116,10 +123,12 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
   logDebug("Spent ", stagingAddTime, " in staging.add");
   logDebug("Spent ", stagingFlushTime, " in staging.flush");
   logDebug("Spent ", queueDrainTime, " in queue.drain");
-  logDebug("Spent ", queue.flushBufferTime, " in queue._flushBuffer");
+  logDebug("Spent ", queue.flushBufferLocalTime, " in queue._flushBuffer (local part)");
+  logDebug("Spent ", queue.flushBufferRemoteTime, " in queue._flushBuffer (remote part)");
   logDebug("Spent ", queue.enqueueUnsafeTime, " in queue._enqueueUnsafe");
   logDebug("Spent ", queue.enqueueTime, " in queue.enqueue");
   logDebug("Spent ", queue.localProcessTime, " in localProcess");
+  // logDebug("Frequency ", frequency.read() / norm.read());
   // logDebug("Processed ", queue!.numRemoteCalls.read(), " remote jobs");
 }
 

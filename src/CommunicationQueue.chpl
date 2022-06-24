@@ -3,6 +3,7 @@ module CommunicationQueue {
 use CTypes;
 use BlockDist;
 use Time;
+use ChapelLocks;
 
 use FFI;
 use ForeignTypes;
@@ -75,7 +76,8 @@ class CommunicationQueue {
   // var _basisPtr : c_ptr(Basis);
   // var _accessorPtr : c_ptr(ConcurrentAccessor(eltType));
   // var numRemoteCalls : atomic int;
-  var flushBufferTime : atomic real;
+  var flushBufferLocalTime : atomic real;
+  var flushBufferRemoteTime : atomic real;
   var enqueueUnsafeTime : atomic real;
   var enqueueTime : atomic real;
   var localProcessTime : atomic real;
@@ -102,19 +104,26 @@ class CommunicationQueue {
       if release then _unlock(localeIdx);
 
       timer.stop();
-      flushBufferTime.add(timer.elapsed());
+      flushBufferLocalTime.add(timer.elapsed());
       return;
     }
 
     ref remoteBuffer = _remoteBuffers[localeIdx];
+    remoteBuffer.lock.lock();
     remoteBuffer.put(_basisStates[localeIdx], _coeffs[localeIdx], mySize);
-    size = 0;
-
-    if release then _unlock(localeIdx);
     const remoteBasis = _bases[localeIdx];
     const remoteAccessor = _accessors[localeIdx];
     const remoteBasisStates = remoteBuffer.basisStates;
     const remoteCoeffs = remoteBuffer.coeffs;
+    size = 0;
+
+    if release {
+      _unlock(localeIdx);
+    }
+
+    timer.stop();
+    var rTimer = new Timer();
+    rTimer.start();
     on Locales[localeIdx] {
       // const basisStates : [0 ..# size] uint(64) = sigmas;
       // const coeffs : [0 ..# size] cs.eltType = cs;
@@ -128,12 +137,17 @@ class CommunicationQueue {
       // queue!.localProcess(basisStates, coeffs);
       localProcess(remoteBasis, remoteAccessor, remoteBasisStates, remoteCoeffs, mySize);
     }
+    rTimer.stop();
+    flushBufferRemoteTime.add(rTimer.elapsed());
+    timer.start();
+
+    remoteBuffer.lock.unlock();
     // We need to wait for the remote copy to complete before we can reuse
     // `sigmas` and `cs`.
     // copyComplete$.readFF();
     // logDebug("end processOnRemote!");
     timer.stop();
-    flushBufferTime.add(timer.elapsed());
+    flushBufferLocalTime.add(timer.elapsed());
   }
 
   inline proc _enqueueUnsafe(localeIdx : int,
@@ -149,7 +163,7 @@ class CommunicationQueue {
     c_memcpy(c_ptrTo(_basisStates[localeIdx][offset]), basisStates, count:c_size_t * c_sizeof(uint(64)));
     c_memcpy(c_ptrTo(_coeffs[localeIdx][offset]), coeffs, count:c_size_t * c_sizeof(coeffType));
     offset += count;
-    // So far, everything was done locally. Only `processOnRemote` involves
+    // So far, everything was done locally. Only `_flushBuffer` involves
     // communication.
     if offset == _dom.size then
       _flushBuffer(localeIdx, release);
@@ -182,8 +196,8 @@ class CommunicationQueue {
     while count > 0 {
       _lock(localeIdx);
       const remaining = min(_dom.size - _sizes[localeIdx], count);
-      _enqueueUnsafe(localeIdx, remaining, basisStates, coeffs, release=false);
-      _unlock(localeIdx);
+      _enqueueUnsafe(localeIdx, remaining, basisStates, coeffs, release=true);
+      // _unlock(localeIdx);
       count -= remaining;
       basisStates += remaining;
       coeffs += remaining;
@@ -194,10 +208,9 @@ class CommunicationQueue {
 
   proc drain() {
     for localeIdx in LocaleSpace {
-      // if _sizes[localeIdx] > 0 {
       _lock(localeIdx);
       _flushBuffer(localeIdx, release=true);
-      // }
+      // _unlock(localeIdx);
     }
     // Check
     foreach localeIdx in LocaleSpace do
@@ -211,6 +224,7 @@ record RemoteBuffer {
   var localeIdx : int;
   var basisStates : c_ptr(uint(64));
   var coeffs : c_ptr(coeffType);
+  var lock : chpl_LocalSpinlock;
 
   proc postinit() {
     const rvf_size = size;
@@ -248,6 +262,8 @@ record StagingBuffers {
   var _basisStates : [0 ..# numLocales, 0 ..# _capacity] uint(64);
   var _coeffs : [0 ..# numLocales, 0 ..# _capacity] coeffType;
   var _queue : c_ptr(owned CommunicationQueue(coeffType));
+  var sameCount : int;
+  var totalCount : int;
 
   proc init(ref queue : owned CommunicationQueue(?t)) {
     this.coeffType = t;
@@ -274,8 +290,8 @@ record StagingBuffers {
 
   proc flush(localeIdx : int) {
     _queue.deref().enqueue(localeIdx, _sizes[localeIdx],
-                   c_const_ptrTo(_basisStates[localeIdx, 0]),
-                   c_const_ptrTo(_coeffs[localeIdx, 0]));
+                           c_const_ptrTo(_basisStates[localeIdx, 0]),
+                           c_const_ptrTo(_coeffs[localeIdx, 0]));
     _sizes[localeIdx] = 0;
   }
   proc flush() {
@@ -286,6 +302,11 @@ record StagingBuffers {
   proc add(localeIdx : int, basisState : uint(64), coeff : coeffType) {
     ref n = _sizes[localeIdx];
     assert(n < _capacity);
+    if n > 0 {
+      if basisState == _basisStates[localeIdx, n - 1] then
+        sameCount += 1;
+      totalCount += 1;
+    }
     _basisStates[localeIdx, n] = basisState;
     _coeffs[localeIdx, n] = coeff;
     n += 1;

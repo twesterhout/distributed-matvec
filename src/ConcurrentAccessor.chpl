@@ -14,11 +14,11 @@ config const concurrentAccessorNumLocks = 5 * here.maxTaskPar;
 // count.
 record ConcurrentAccessor {
   type eltType;
-  var _data : c_ptr(eltType);
+  var _data : c_ptr(chpl__processorAtomicType(eltType));
   var _numElts : int;
-  var _blockSize : int;
-  var numLocks : int;
-  var _locks : [0 ..# numLocks] chpl_LocalSpinlock;
+  // var _blockSize : int;
+  // var numLocks : int;
+  // var _locks : [0 ..# numLocks] chpl_LocalSpinlock;
 
   proc init(ref arr : [] ?t, in numLocks : int = concurrentAccessorNumLocks)
       where !arr.domain.stridable && arr.domain.rank == 1 {
@@ -29,28 +29,28 @@ record ConcurrentAccessor {
     // logDebug(arr.domain);
     // logDebug(arr[arr.domain.low]);
     // logDebug(arr[arr.domain.low].locale);
-    this._data = c_ptrTo(arr[arr.domain.low]);
+    this._data = c_ptrTo(arr[arr.domain.low]):c_ptr(chpl__processorAtomicType(eltType));
     this._numElts = arr.size;
     // It makes no sense to have more locks that there are array elements:
-    if numLocks > _numElts then
-      numLocks = _numElts;
-    this._blockSize = (arr.size + numLocks - 1) / numLocks;
-    this.numLocks = numLocks;
-    assert(_blockSize * numLocks >= _numElts);
+    // if numLocks > _numElts then
+    //   numLocks = _numElts;
+    // this._blockSize = (arr.size + numLocks - 1) / numLocks;
+    // this.numLocks = numLocks;
+    // assert(_blockSize * numLocks >= _numElts);
   }
 
-  inline proc _blockIdx(i : int) : int {
-    if i >= _numElts then
-      halt("index out of bounds: i=" + i:string + ", but _numElts=" + _numElts:string);
-    return i / _blockSize;
-  }
+  // inline proc _blockIdx(i : int) : int {
+  //   if i >= _numElts then
+  //     halt("index out of bounds: i=" + i:string + ", but _numElts=" + _numElts:string);
+  //   return i / _blockSize;
+  // }
 
   inline proc localAdd(i : int, x : eltType) {
-    const blockIdx = _blockIdx(i);
-    ref lock = _locks[blockIdx];
-    lock.lock();
-    _data[i] += x;
-    lock.unlock();
+    // const blockIdx = _blockIdx(i);
+    // ref lock = _locks[blockIdx];
+    // lock.lock();
+    _data[i].add(x);
+    // lock.unlock();
   }
 }
 
