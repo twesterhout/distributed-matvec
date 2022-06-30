@@ -60,7 +60,7 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
   var queueDrainTime : atomic real;
 
   const chunkSize = (representatives.size + numChunks - 1) / numChunks;
-  logDebug("Using chunkSize=", chunkSize);
+  logDebug("Local dimension=", representatives.size, ", chunkSize=", chunkSize);
   // Used to calculate the action of matrix on a chunk of basis elements.
   // batchedOperator stores some task-local buffers and a pointer to `matrix`.
   // var batchedOperator = new BatchedOperator(matrix, chunkSize);
@@ -124,10 +124,15 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
   logDebug("Spent ", stagingFlushTime, " in staging.flush");
   logDebug("Spent ", queueDrainTime, " in queue.drain");
   logDebug("Spent ", queue.flushBufferLocalTime, " in queue._flushBuffer (local part)");
+  logDebug("Spent ", queue.flushBufferPutTime, " in queue._flushBuffer (put part)");
   logDebug("Spent ", queue.flushBufferRemoteTime, " in queue._flushBuffer (remote part)");
   logDebug("Spent ", queue.enqueueUnsafeTime, " in queue._enqueueUnsafe");
   logDebug("Spent ", queue.enqueueTime, " in queue.enqueue");
   logDebug("Spent ", queue.localProcessTime, " in localProcess");
+  logDebug("Spent ", globalLocalProcessTime[here.id][0].read(), " in localProcess (all, indexing)");
+  logDebug("Spent ", globalLocalProcessTime[here.id][1].read(), " in localProcess (all, allocate)");
+  logDebug("Spent ", globalLocalProcessTime[here.id][2].read(), " in localProcess (all, accessing)");
+  // logDebug("Spent ", queue._remoteBuffers.localProcessTime, " in remoteLocalProcess");
   // logDebug("Frequency ", frequency.read() / norm.read());
   // logDebug("Processed ", queue!.numRemoteCalls.read(), " remote jobs");
 }
@@ -153,7 +158,11 @@ proc matrixVectorProduct(matrixFilename : string,
     const ref myBasisStates = representatives.getBlock(loc.id);
     myMatrix.basis.uncheckedSetRepresentatives(myBasisStates);
     // myY += 1;
+    var timer = new Timer();
+    timer.start();
     localMatrixVector(myMatrix, myX, myY, myBasisStates);
+    timer.stop();
+    logDebug("Spent ", timer.elapsed(), " in localMatrixVector");
   }
 }
 

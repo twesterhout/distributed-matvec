@@ -9,23 +9,27 @@ private proc localCompressMultiply(batchSize : int, numberTerms : int,
                                    sigmas : c_ptr(uint(64)), cs : c_ptr(complex(128)),
                                    xs : c_ptr(?eltType), offsets : c_ptr(int)) {
   var offset : int = 0;
-  var i : int = 0;
+  // var i : int = 0;
 
-  offsets[0] = 0;
+  // offsets[0] = 0;
   for batchIdx in 0 ..# batchSize {
-    for termIdx in 0 ..# numberTerms {
-      if (cs[i] != 0) {
-        if (i > offset) {
-          cs[offset] = cs[i];
-          sigmas[offset] = sigmas[i];
-        }
-        cs[offset] *= xs[batchIdx];
-        offset += 1;
-      }
-      i += 1;
+    foreach termIdx in 0 ..# numberTerms {
+      cs[batchIdx * numberTerms + termIdx] *= xs[batchIdx];
     }
-    offsets[batchIdx + 1] = offset;
+    // for termIdx in 0 ..# numberTerms {
+      // if (cs[i] != 0) {
+      //   if (i > offset) {
+      //     cs[offset] = cs[i];
+      //     sigmas[offset] = sigmas[i];
+      //   }
+      //  cs[offset] *= xs[batchIdx];
+      //  offset += 1;
+      // }
+      // i += 1;
+    // }
+    // offsets[batchIdx + 1] = offset;
   }
+  offsets[batchSize] = batchSize * numberTerms;
 }
 
 record BatchedOperator {

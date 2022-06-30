@@ -11,6 +11,7 @@ use ConcurrentAccessor;
 
 config const communicationQueueBufferSize = 32000;
 config const stagingBuffersBufferSize = 100;
+config const stagingBuffersBlockSize = 128;
 
 // inline proc getAddr(const ref p): c_ptr(p.type) {
 //   // TODO can this use c_ptrTo?
@@ -25,31 +26,51 @@ inline proc PUT(addr, node, rAddr, size) {
   __primitive("chpl_comm_put", addr, node, rAddr, size);
 }
 
+var globalLocalProcessTime : [LocaleSpace dmapped Block(LocaleSpace)] (atomic real, atomic real, atomic real);
+
 proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccessor(?coeffType)),
                   basisStates : c_ptr(uint(64)), coeffs : c_ptr(coeffType), size : int) {
-  assert(basisPtr != nil);
-  assert(accessorPtr != nil);
+  var indexingTimer = new Timer();
+  var allocateTimer = new Timer();
+  var accessTimer = new Timer();
+  local {
+    assert(basisPtr != nil);
+    assert(accessorPtr != nil);
 
-  // count == 0 has to be handled separately because c_ptrTo(indices) fails
-  // when the size of indices is 0.
-  if size == 0 then return;
+    // count == 0 has to be handled separately because c_ptrTo(indices) fails
+    // when the size of indices is 0.
+    if size == 0 then return;
 
-  // TODO: is the fact that we're allocating `indices` over and over again
-  // okay performance-wise?
-  // logDebug("ls_hs_state_index ...");
-  var indices : [0 ..# size] int = noinit;
-  ls_hs_state_index(basisPtr.deref().payload, size, basisStates, 1, c_ptrTo(indices), 1);
-  ref accessor = accessorPtr.deref();
-  foreach k in 0 ..# size {
-    const i = indices[k];
-    const c = coeffs[k];
-    // Importantly, the user could have made a mistake and given us an
-    // operator which does not respect the basis symmetries. Then we could
-    // have that a |σ⟩ was generated that doesn't belong to our basis. In
-    // this case, we should throw an error.
-    if i >= 0 then accessor.localAdd(i, c);
-              else halt("invalid index");
+    // TODO: is the fact that we're allocating `indices` over and over again
+    // okay performance-wise?
+    // logDebug("ls_hs_state_index ...");
+
+    allocateTimer.start();
+    var indices : [0 ..# size] int = noinit;
+    allocateTimer.stop();
+
+    indexingTimer.start();
+    ls_hs_state_index(basisPtr.deref().payload, size, basisStates, 1, c_ptrTo(indices[0]), 1);
+    indexingTimer.stop();
+
+    accessTimer.start();
+    ref accessor = accessorPtr.deref();
+    foreach k in 0 ..# size {
+      const i = indices[k];
+      const c = coeffs[k];
+      // Importantly, the user could have made a mistake and given us an
+      // operator which does not respect the basis symmetries. Then we could
+      // have that a |σ⟩ was generated that doesn't belong to our basis. In
+      // this case, we should throw an error.
+      if i >= 0 then accessor.localAdd(i, c);
+                else halt("invalid index");
+    }
+    accessTimer.stop();
   }
+  ref myTimes = globalLocalProcessTime[here.id];
+  myTimes[0].add(indexingTimer.elapsed());
+  myTimes[1].add(allocateTimer.elapsed());
+  myTimes[2].add(accessTimer.elapsed());
 }
 // inline proc localProcess(const ref sigmas : [] uint(64),
 //                          const ref coeffs : [] complex(128)) {
@@ -72,11 +93,13 @@ class CommunicationQueue {
   var _bases : [LocaleSpace] c_ptr(Basis);
   var _accessors : [LocaleSpace] c_ptr(ConcurrentAccessor(coeffType));
 
-  var _locks : [LocaleSpace] sync bool;
+  // var _locks : [LocaleSpace] sync bool;
+  var _locks : [LocaleSpace] chpl_LocalSpinlock;
   // var _basisPtr : c_ptr(Basis);
   // var _accessorPtr : c_ptr(ConcurrentAccessor(eltType));
   // var numRemoteCalls : atomic int;
   var flushBufferLocalTime : atomic real;
+  var flushBufferPutTime : atomic real;
   var flushBufferRemoteTime : atomic real;
   var enqueueUnsafeTime : atomic real;
   var enqueueTime : atomic real;
@@ -90,8 +113,10 @@ class CommunicationQueue {
     complete();
   }
 
-  inline proc _lock(localeIdx : int) { _locks[localeIdx].writeEF(true); }
-  inline proc _unlock(localeIdx : int) { _locks[localeIdx].readFE(); }
+  inline proc _lock(localeIdx : int) { _locks[localeIdx].lock(); }
+  inline proc _unlock(localeIdx : int) { _locks[localeIdx].unlock(); }
+  // inline proc _lock(localeIdx : int) { _locks[localeIdx].writeEF(true); }
+  // inline proc _unlock(localeIdx : int) { _locks[localeIdx].readFE(); }
 
   proc _flushBuffer(localeIdx : int, release : bool = false) {
     var timer = new Timer();
@@ -110,11 +135,17 @@ class CommunicationQueue {
 
     ref remoteBuffer = _remoteBuffers[localeIdx];
     remoteBuffer.lock.lock();
+    var putTimer = new Timer();
+    putTimer.start();
     remoteBuffer.put(_basisStates[localeIdx], _coeffs[localeIdx], mySize);
+    putTimer.stop();
+    flushBufferPutTime.add(putTimer.elapsed());
+    
     const remoteBasis = _bases[localeIdx];
     const remoteAccessor = _accessors[localeIdx];
     const remoteBasisStates = remoteBuffer.basisStates;
     const remoteCoeffs = remoteBuffer.coeffs;
+    const remoteLocalProcessTimePtr = c_ptrTo(remoteBuffer.localProcessTime);
     size = 0;
 
     if release {
@@ -135,7 +166,11 @@ class CommunicationQueue {
       // logDebug("  " + queuePtr.deref()._basisPtr:string);
       // queue!.numRemoteCalls.add(1);
       // queue!.localProcess(basisStates, coeffs);
+      // var timer = new Timer();
+      // timer.start();
       localProcess(remoteBasis, remoteAccessor, remoteBasisStates, remoteCoeffs, mySize);
+      // timer.stop();
+      // remoteLocalProcessTimePtr.deref() += timer.elapsed();
     }
     rTimer.stop();
     flushBufferRemoteTime.add(rTimer.elapsed());
@@ -226,6 +261,8 @@ record RemoteBuffer {
   var coeffs : c_ptr(coeffType);
   var lock : chpl_LocalSpinlock;
 
+  var localProcessTime : real;
+
   proc postinit() {
     const rvf_size = size;
     on Locales[localeIdx] {
@@ -302,11 +339,6 @@ record StagingBuffers {
   proc add(localeIdx : int, basisState : uint(64), coeff : coeffType) {
     ref n = _sizes[localeIdx];
     assert(n < _capacity);
-    if n > 0 {
-      if basisState == _basisStates[localeIdx, n - 1] then
-        sameCount += 1;
-      totalCount += 1;
-    }
     _basisStates[localeIdx, n] = basisState;
     _coeffs[localeIdx, n] = coeff;
     n += 1;
@@ -316,12 +348,35 @@ record StagingBuffers {
   proc add(batchSize : int,
            basisStatesPtr : c_ptr(uint(64)),
            coeffsPtr : c_ptr(?t)) {
+    param blockSize = 128;
+    const numBlocks = batchSize / blockSize;
+    const numRest = batchSize % blockSize;
+
+    var localeIdxs : c_array(int, blockSize);
+    for i in 0 ..# numBlocks {
+      foreach k in 0 ..# blockSize {
+        localeIdxs[k] = localeIdxOf(basisStatesPtr[i * blockSize + k]);
+      }
+      for k in 0 ..# blockSize {
+        const c = coeffsPtr[i * blockSize + k]:coeffType;
+        if c != 0 then
+          add(localeIdxs[k], basisStatesPtr[i * blockSize + k], c);
+      }
+    }
+    for i in blockSize * numBlocks ..< batchSize {
+      const c = coeffsPtr[i]:coeffType;
+      if c != 0 {
+        const localeIdx = localeIdxOf(basisStatesPtr[i]);
+        add(localeIdx, basisStatesPtr[i], c);
+      }
+    }
+
     // This function could potentially be vectorized, because
     // computing hashes should make it compute bound.
-    for i in 0 ..# batchSize {
-      const localeIdx = localeIdxOf(basisStatesPtr[i]);
-      add(localeIdx, basisStatesPtr[i], coeffsPtr[i]:coeffType);
-    }
+    // for i in 0 ..# batchSize {
+    //   const localeIdx = localeIdxOf(basisStatesPtr[i]);
+    //   add(localeIdx, basisStatesPtr[i], coeffsPtr[i]:coeffType);
+    // }
   }
 }
 

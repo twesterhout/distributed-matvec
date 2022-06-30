@@ -11,6 +11,7 @@ config const kHamiltonian = "data/heisenberg_chain_10.yaml";
 config const kVectors = "data/matvec/heisenberg_chain_10.h5";
 config const kAbsTol = 1e-14;
 config const kRelTol = 1e-12;
+config const kVerbose = false;
 
 proc approxEqual(a : real, b : real, atol = kAbsTol, rtol = kRelTol) {
   return abs(a - b) <= max(atol, rtol * max(abs(a), abs(b)));
@@ -32,6 +33,9 @@ proc main() {
   // const (xRaw, yRaw) = localLoadVectors(kVectors);
   // const x = xRaw;
   // const y = xRaw;
+  if kVerbose then
+    writeln(basisStates);
+
   const basisStatesRaw = statesFromHashedToBlock(basisStates);
   const xRaw = readVectorsAsBlocks(kVectors, "/x");
   const x = vectorsFromBlockToHashed(basisStatesRaw, xRaw);
