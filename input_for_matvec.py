@@ -5,6 +5,8 @@ import os
 import time
 import yaml
 
+np.random.seed(42)
+
 def load_hamiltonian(filename: str):
     _, extension = os.path.splitext(filename)
     if extension != ".yaml" and extension != ".yml":
@@ -17,6 +19,7 @@ def load_hamiltonian(filename: str):
         config = yaml.load(f, Loader=yaml.SafeLoader)
     basis = ls.SpinBasis.load_from_yaml(config["basis"])
     return ls.Operator.load_from_yaml(config["hamiltonian"], basis)
+
 
 def generate(basis_filename: str, output_filename: str, batch_size: int = 1):
     hamiltonian = load_hamiltonian(basis_filename)
@@ -34,9 +37,17 @@ def generate(basis_filename: str, output_filename: str, batch_size: int = 1):
 
 
 def main():
-    generate("data/heisenberg_chain_10.yaml", "data/matvec/heisenberg_chain_10.h5", 1)
-    generate("data/heisenberg_square_5x5.yaml", "data/matvec/heisenberg_square_5x5.h5", 1)
-    generate("data/heisenberg_square_6x6.yaml", "data/matvec/heisenberg_square_6x6.h5", 1)
+    # generate("data/heisenberg_chain_10.yaml", "data/matvec/heisenberg_chain_10.h5", 1)
+    # generate("data/heisenberg_square_5x5.yaml", "data/matvec/heisenberg_square_5x5.h5", 1)
+    # generate("data/heisenberg_square_6x6.yaml", "data/matvec/heisenberg_square_6x6.h5", 1)
+    # generate("data/old/heisenberg_chain_20.yaml", "data/matvec/heisenberg_chain_20.h5", 1)
+    for i in [10, 12, 16, 20, 24, 28, 32]:
+        generate(
+            "data/old/heisenberg_chain_{}.yaml".format(i),
+            "data/matvec/heisenberg_chain_{}.h5".format(i),
+            1,
+        )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
