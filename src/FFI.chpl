@@ -148,6 +148,14 @@ module FFI {
     batchSize : c_ptrdiff, alphas : c_ptr(uint(64)), alphas_stride : c_ptrdiff,
     betas : c_ptr(uint(64)), betas_stride : c_ptrdiff, coeffs : c_ptr(complex(128)));
 
+  extern proc ls_internal_operator_apply_diag_x1(
+    op : c_ptr(ls_hs_operator), batch_size : c_ptrdiff, alphas : c_ptr(uint(64)),
+    ys : c_ptr(real(64)), xs : c_ptr(real(64)));
+  extern proc ls_internal_operator_apply_off_diag_x1(
+    op : c_ptr(ls_hs_operator), batch_size : c_ptrdiff, alphas : c_ptr(uint(64)),
+    betas : c_ptr(uint(64)), coeffs : c_ptr(complex(128)), offsets : c_ptr(c_ptrdiff),
+    xs : c_ptr(real));
+
   extern proc ls_hs_evaluate_wavefunction_via_statevector(
     kernels : c_ptr(ls_hs_basis_kernels), batch_size : c_ptrdiff,
     alphas : c_ptr(uint(64)), alphas_stride : c_ptrdiff, state_vector : c_void_ptr,

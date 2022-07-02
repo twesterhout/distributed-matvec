@@ -29,7 +29,7 @@ inline proc PUT(addr, node, rAddr, size) {
 var globalLocalProcessTime : [LocaleSpace dmapped Block(LocaleSpace)] (atomic real, atomic real, atomic real);
 
 proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccessor(?coeffType)),
-                  basisStates : c_ptr(uint(64)), coeffs : c_ptr(coeffType), size : int) {
+                  basisStates : c_ptr(uint(64)), coeffs : c_ptr(?t), size : int) {
   var indexingTimer = new Timer();
   var allocateTimer = new Timer();
   var accessTimer = new Timer();
@@ -57,7 +57,7 @@ proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccesso
     ref accessor = accessorPtr.deref();
     foreach k in 0 ..# size {
       const i = indices[k];
-      const c = coeffs[k];
+      const c = coeffs[k]:coeffType;
       // Importantly, the user could have made a mistake and given us an
       // operator which does not respect the basis symmetries. Then we could
       // have that a |σ⟩ was generated that doesn't belong to our basis. In
@@ -188,7 +188,7 @@ class CommunicationQueue {
   inline proc _enqueueUnsafe(localeIdx : int,
                              count : int,
                              basisStates : c_ptr(uint(64)),
-                             coeffs : c_ptr(coeffType),
+                             coeffs : c_ptr(?t),
                              release : bool) {
     var timer = new Timer();
     timer.start();
@@ -196,7 +196,10 @@ class CommunicationQueue {
     ref offset = _sizes[localeIdx];
     assert(offset + count <= _dom.size);
     c_memcpy(c_ptrTo(_basisStates[localeIdx][offset]), basisStates, count:c_size_t * c_sizeof(uint(64)));
-    c_memcpy(c_ptrTo(_coeffs[localeIdx][offset]), coeffs, count:c_size_t * c_sizeof(coeffType));
+    // c_memcpy(c_ptrTo(_coeffs[localeIdx][offset]), coeffs, count:c_size_t * c_sizeof(coeffType));
+    const dst = c_ptrTo(_coeffs[localeIdx][offset]);
+    foreach i in 0 ..# count do
+      dst[i] = coeffs[i]:coeffType;
     offset += count;
     // So far, everything was done locally. Only `_flushBuffer` involves
     // communication.
@@ -212,7 +215,7 @@ class CommunicationQueue {
   proc enqueue(localeIdx : int,
                in count : int,
                in basisStates : c_ptr(uint(64)),
-               in coeffs : c_ptr(coeffType)) {
+               in coeffs : c_ptr(?t)) {
     var timer = new Timer();
     timer.start();
 
@@ -299,7 +302,9 @@ record StagingBuffers {
   var _basisStates : [0 ..# numLocales, 0 ..# _capacity] uint(64);
   var _coeffs : [0 ..# numLocales, 0 ..# _capacity] coeffType;
   var _queue : c_ptr(owned CommunicationQueue(coeffType));
-  var sameCount : int;
+  var hashTime : real;
+  var enqueueTime : real;
+  var nonZeroCount : int;
   var totalCount : int;
 
   proc init(ref queue : owned CommunicationQueue(?t)) {
@@ -325,11 +330,20 @@ record StagingBuffers {
     }
   }
 
+  // proc deinit() {
+    // logDebug("StagingBuffers: spent ", hashTime, " in localeIdxOf (and related stuff) and ",
+    //          enqueueTime, " in enqueue; nonZeroCount / totalCount = ", nonZeroCount:real / totalCount:real);
+  // }
+
   proc flush(localeIdx : int) {
+    var timer = new Timer();
+    timer.start();
     _queue.deref().enqueue(localeIdx, _sizes[localeIdx],
                            c_const_ptrTo(_basisStates[localeIdx, 0]),
                            c_const_ptrTo(_coeffs[localeIdx, 0]));
     _sizes[localeIdx] = 0;
+    timer.stop();
+    enqueueTime += timer.elapsed();
   }
   proc flush() {
     foreach localeIdx in LocaleSpace do
@@ -348,10 +362,21 @@ record StagingBuffers {
   proc add(batchSize : int,
            basisStatesPtr : c_ptr(uint(64)),
            coeffsPtr : c_ptr(?t)) {
+    var timer = new Timer();
+
+    if numLocales == 1 {
+      // timer.start();
+      _queue.deref().enqueue(here.id, batchSize, basisStatesPtr, coeffsPtr);
+      // timer.stop();
+      // enqueueTime += timer.elapsed();
+      return;
+    }
+
     param blockSize = 128;
     const numBlocks = batchSize / blockSize;
     const numRest = batchSize % blockSize;
 
+    timer.start();
     var localeIdxs : c_array(int, blockSize);
     for i in 0 ..# numBlocks {
       foreach k in 0 ..# blockSize {
@@ -359,18 +384,27 @@ record StagingBuffers {
       }
       for k in 0 ..# blockSize {
         const c = coeffsPtr[i * blockSize + k]:coeffType;
-        if c != 0 then
+        // if c != 0 {
+          timer.stop();
           add(localeIdxs[k], basisStatesPtr[i * blockSize + k], c);
+          timer.start();
+        // }
       }
     }
     for i in blockSize * numBlocks ..< batchSize {
       const c = coeffsPtr[i]:coeffType;
-      if c != 0 {
-        const localeIdx = localeIdxOf(basisStatesPtr[i]);
-        add(localeIdx, basisStatesPtr[i], c);
-      }
+      // totalCount += 1;
+      // if c != 0 {
+        // nonZeroCount += 1;
+      const localeIdx = localeIdxOf(basisStatesPtr[i]);
+      timer.stop();
+      add(localeIdx, basisStatesPtr[i], c);
+      timer.start();
+      // }
     }
 
+    timer.stop();
+    hashTime += timer.elapsed();
     // This function could potentially be vectorized, because
     // computing hashes should make it compute bound.
     // for i in 0 ..# batchSize {

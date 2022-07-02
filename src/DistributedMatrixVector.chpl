@@ -4,6 +4,7 @@ use CTypes;
 use RangeChunk;
 use AllLocalesBarriers;
 use Time;
+use DynamicIters;
 
 use FFI;
 use ForeignTypes;
@@ -14,24 +15,26 @@ use CommunicationQueue;
 /* 
  */
 private proc localDiagonalBatch(indices : range(int, BoundedRangeType.bounded, false),
-                                ref workspace : [] complex(128), matrix : Operator,
-                                const ref x : [] ?eltType, ref y : [] eltType,
+                                matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                                 const ref representatives : [] uint(64)) {
   const batchSize = indices.size;
-  assert(workspace.size >= batchSize);
+  // assert(workspace.size >= batchSize);
   // if workspace.size < batchSize then
   //   workspace.domain = {0 ..# batchSize};
-  ls_hs_operator_apply_diag_kernel(
-    matrix.payload, batchSize,
-    c_const_ptrTo(representatives[indices.low]), 1,
-    c_ptrTo(workspace));
-  foreach i in indices {
-    y[i] = x[i] * workspace[i - indices.low]:eltType;
-  }
+  ls_internal_operator_apply_diag_x1(
+    matrix.payload, batchSize, c_const_ptrTo(representatives[indices.low]),
+    c_ptrTo(y[indices.low]), c_const_ptrTo(x[indices.low]));
+  // ls_hs_operator_apply_diag_kernel(
+  //   matrix.payload, batchSize,
+  //   c_const_ptrTo(representatives[indices.low]), 1,
+  //   c_ptrTo(workspace));
+  // foreach i in indices {
+  //   y[i] = x[i] * workspace[i - indices.low]:eltType;
+  // }
 }
 
-config const matrixVectorDiagonalNumChunks : int = here.maxTaskPar;
-config const matrixVectorOffDiagonalNumChunks : int = 10 * here.maxTaskPar;
+config const matrixVectorDiagonalNumChunks : int = 10 * here.maxTaskPar;
+config const matrixVectorOffDiagonalNumChunks : int = 150 * here.maxTaskPar;
 
 private proc localDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                            const ref representatives : [] uint(64),
@@ -41,9 +44,9 @@ private proc localDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y :
   const batchSize = (totalSize + numChunks - 1) / numChunks;
   var ranges : [0 ..# numChunks] range(int, BoundedRangeType.bounded, false) =
     chunks(0 ..# totalSize, numChunks);
-  var workspace : [0 ..# batchSize] complex(128) = noinit;
-  forall r in ranges with (in workspace) {
-    localDiagonalBatch(r, workspace, matrix, x, y, representatives);
+  // var workspace : [0 ..# batchSize] complex(128) = noinit;
+  forall r in ranges {
+    localDiagonalBatch(r, matrix, x, y, representatives);
   }
 }
 
@@ -54,10 +57,14 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
                               numChunks : int = min(matrixVectorOffDiagonalNumChunks,
                                                     representatives.size)) {
   var timer = new Timer();
+  timer.start();
+  var initTime : real;
   var computeOffDiagTime : atomic real;
   var stagingAddTime : atomic real;
   var stagingFlushTime : atomic real;
   var queueDrainTime : atomic real;
+  var initTimer = new Timer();
+  initTimer.start();
 
   const chunkSize = (representatives.size + numChunks - 1) / numChunks;
   logDebug("Local dimension=", representatives.size, ", chunkSize=", chunkSize);
@@ -69,19 +76,19 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
   var accessor = new ConcurrentAccessor(y);
   globalPtrStore[here.id] = (c_const_ptrTo(matrix.basis), c_ptrTo(accessor));
   allLocalesBarrier.barrier();
-  timer.start();
 
   var queue = new CommunicationQueue(eltType, globalPtrStore);
-  // writeln(globalAllQueues);
 
-  // logDebug(representatives.size:string + " vs. " + numChunks:string);
-  var ranges : [0 ..# numChunks] range(int) =
+  const ranges : [0 ..# numChunks] range(int) =
     chunks(0 ..# representatives.size, numChunks);
-  // var frequency : atomic real;
-  // var norm : atomic int;
-  forall r in ranges with (ref queue,
+  initTimer.stop();
+  initTime += initTimer.elapsed();
+  forall rangeIdx in dynamic(0 ..# numChunks, chunkSize=1)
+              // ranges
+                     with (ref queue,
                            var batchedOperator = new BatchedOperator(matrix, chunkSize),
                            var staging = new StagingBuffers(queue)) {
+    const r : range(int) = ranges[rangeIdx];
     // logDebug("Processing ", r, " ...");
 
     var timer = new Timer();
@@ -119,6 +126,7 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
   allLocalesBarrier.barrier();
   timer.stop();
   logDebug("Spent ", timer.elapsed(), " in the body of localOffDiagonal");
+  logDebug("Spent ", initTime, " in initialization");
   logDebug("Spent ", computeOffDiagTime, " in computeOffDiag");
   logDebug("Spent ", stagingAddTime, " in staging.add");
   logDebug("Spent ", stagingFlushTime, " in staging.flush");
