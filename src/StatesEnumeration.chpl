@@ -16,6 +16,7 @@ use RangeChunk;
 use Search;
 use AllLocalesBarriers;
 use CommDiagnostics;
+use Time;
 
 /* Get next integer with the same hamming weight.
 
@@ -100,6 +101,8 @@ private inline proc unprojectedIndexToState(stateIndex : int, hammingWeight : in
  */
 proc determineEnumerationRanges(r : range(uint(64)), in numChunks : int,
                                 isHammingWeightFixed : bool) {
+  var timer = new Timer();
+  timer.start();
   const hammingWeight = if isHammingWeightFixed then popcount(r.low):int else -1;
   const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
   const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
@@ -111,6 +114,8 @@ proc determineEnumerationRanges(r : range(uint(64)), in numChunks : int,
     ranges[i] = unprojectedIndexToState(r.low, hammingWeight)
                   .. unprojectedIndexToState(r.high, hammingWeight);
   }
+  timer.stop();
+  logDebug("determineEnumerationRanges took ", timer.elapsed());
   return ranges;
 }
 
@@ -648,9 +653,9 @@ proc getPerLocaleCountAndOffset(masks : [] int) {
   const perLocaleCountPtr = c_ptrTo(perLocaleCount[0, 0]);
   coforall loc in Locales do on loc {
     const ref myMasks = masks[masks.localSubdomain()];
-    var myCount : [0 ..# numLocales] chpl__processorAtomicType(int);
-    forall key in myMasks {
-      myCount[key].add(1, memoryOrder.relaxed);
+    var myCount : [0 ..# numLocales] int;
+    forall key in myMasks with (+ reduce myCount) {
+      myCount[key] += 1;
     }
 
     if kUseLowLevelComm {
@@ -659,7 +664,7 @@ proc getPerLocaleCountAndOffset(masks : [] int) {
       PUT(c_ptrTo(myCount[0]):c_ptr(int), 0, perLocaleCountPtr + putOffset, putSize);
     }
     else {
-      perLocaleCount[loc.id, ..] = [i in 0 ..# numLocales] myCount[i].read();
+      perLocaleCount[loc.id, ..] = myCount;
     }
   }
 
@@ -715,14 +720,24 @@ proc prefixSum(arr : [] ?eltType) {
 proc permuteSmall(arrSize : int, masks : c_ptr(int), arr : c_ptr(?eltType),
                   counts : [] int, destOffsets : [] int, destPtrs : [] c_ptr(eltType)) {
   if kVerboseComm then startVerboseCommHere();
+  // var prepareTimer = new Timer();
+  // var computeTimer = new Timer();
+  var copyTimer = new Timer();
+
+  // prepareTimer.start();
   var offsets : [0 ..# numLocales] int = prefixSum(counts);
-  var src : [0 ..# arrSize] eltType;
+  var src : [0 ..# arrSize] eltType = noinit;
+  // prepareTimer.stop();
+
+  // computeTimer.start();
   for i in 0 ..# arrSize {
     const key = masks[i];
     src[offsets[key]] = arr[i];
     offsets[key] += 1;
   }
+  // computeTimer.stop();
 
+  copyTimer.start();
   var i = 0;
   for localeIdx in 0 ..# numLocales {
     if counts[localeIdx] > 0 {
@@ -733,7 +748,10 @@ proc permuteSmall(arrSize : int, masks : c_ptr(int), arr : c_ptr(?eltType),
       i += counts[localeIdx];
     }
   }
+  copyTimer.stop();
+
   if kVerboseComm then stopVerboseCommHere();
+  return copyTimer.elapsed();
 }
 
 proc _makeDestArr(arr : [] ?eltType, perLocaleCount)
@@ -750,9 +768,24 @@ proc _makeDestArr(arr : [] ?eltType, perLocaleCount)
 }
 
 proc arrFromBlockToHashed(masks : [] int, arr : [] ?eltType) {
+  var setupTimer = new Timer();
+  setupTimer.start();
+
+  // var perLocaleCountAndOffsetTimer = new Timer();
+  // perLocaleCountAndOffsetTimer.start();
   const (perLocaleCount, perLocaleOffset) = getPerLocaleCountAndOffset(masks);
   const perLocaleOffsetPtr = c_const_ptrTo(perLocaleOffset[0, 0]);
+  // perLocaleCountAndOffsetTimer.stop();
+  // logDebug("arrFromBlockToHashed getPerLocaleCountAndOffset took ",
+  //          perLocaleCountAndOffsetTimer.elapsed());
+
+  var makeDestArrTimer = new Timer();
+  makeDestArrTimer.start();
   var destArr = _makeDestArr(arr, perLocaleCount);
+  makeDestArrTimer.stop();
+  // logDebug("arrFromBlockToHashed _makeDestArr took ",
+  //          makeDestArrTimer.elapsed());
+
   var destPtrs : [0 ..# numLocales] c_ptr(eltType);
   const destPtrsPtr = c_const_ptrTo(destPtrs);
 
@@ -760,6 +793,12 @@ proc arrFromBlockToHashed(masks : [] int, arr : [] ?eltType) {
   const batchSize = if arr.domain.rank == 1 then 1 else arr.shape[0];
   const batchIncrement = if arr.domain.rank == 1
                            then 0 else destArr._innerDom.shape[1];
+
+  setupTimer.stop();
+  logDebug("arrFromBlockToHashed setup stage took ", setupTimer.elapsed(), "\n",
+           "                      from which ", makeDestArrTimer.elapsed(),
+           " were spent in _makeDestArr");
+
   coforall loc in Locales do on loc {
     const _myPtr : c_ptr(eltType) = c_ptrTo(destArr._data[loc.id][destArr._innerDom.low]);
     if kUseLowLevelComm then
@@ -792,21 +831,37 @@ proc arrFromBlockToHashed(masks : [] int, arr : [] ?eltType) {
     const ranges : [0 ..# numChunksPerLocale] range(int) =
       chunks(0 ..# myMasksSize, numChunksPerLocale);
 
+    var computeTimer = new Timer();
+    computeTimer.start();
+    // var permuteSmallPrepareTime : atomic real;
+    // var permuteSmallComputeTime : atomic real;
+    var permuteSmallCopyTime : atomic real;
+
     for batchIdx in 0 ..# batchSize {
       const myArrPtr = if arr.domain.rank == 1
                          then c_const_ptrTo(arr[mySubdomain.low])
                          else c_const_ptrTo(arr[batchIdx, mySubdomain.low]);
 
       forall (r, chunkIdx) in zip(ranges, 0 ..# numChunksPerLocale) {
-        permuteSmall(r.size,
-                     myMasksPtr + r.low,
-                     myArrPtr + r.low,
-                     perTaskCount[chunkIdx, ..],
-                     perTaskOffset[chunkIdx, ..],
-                     myDestPtrs);
+        const _copy =
+          permuteSmall(r.size,
+                       myMasksPtr + r.low,
+                       myArrPtr + r.low,
+                       perTaskCount[chunkIdx, ..],
+                       perTaskOffset[chunkIdx, ..],
+                       myDestPtrs);
+        // permuteSmallPrepareTime.add(_prep);
+        // permuteSmallComputeTime.add(_compute);
+        permuteSmallCopyTime.add(_copy, memoryOrder.relaxed);
       }
       myDestPtrs += batchIncrement;
     }
+
+    computeTimer.stop();
+    logDebug("arrFromBlockToHashed main loop took ", computeTimer.elapsed(), "\n",
+             "                      from which ", permuteSmallCopyTime.read(),
+             " were spent in remote PUTs (divide by the number of tasks because ",
+             "they ran in parallel)");
   }
   if kVerboseComm then stopVerboseComm();
   return destArr;
