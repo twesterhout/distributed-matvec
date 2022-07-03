@@ -91,22 +91,28 @@ class BlockVector {
   var _innerDom : domain(innerRank);
   var _data : [_outerDom] [_innerDom] eltType;
 
-  proc init(type eltType, counts : [] int) {
+  proc init(type eltType, counts : [] int, outerDom) {
     this.eltType = eltType;
     this.innerRank = 1;
-    this._outerDom = counts.domain;
+    this._outerDom = outerDom;
     this._counts = counts;
     const maxNumElts = max reduce _counts;
     this._innerDom = {0 ..# maxNumElts};
   }
+  proc init(type eltType, counts : [] int) {
+    init(eltType, counts, counts.domain);
+  }
 
-  proc init(type eltType, batchSize : int, counts : [] int) {
+  proc init(type eltType, batchSize : int, counts : [] int, outerDom) {
     this.eltType = eltType;
     this.innerRank = 2;
-    this._outerDom = counts.domain;
+    this._outerDom = outerDom;
     this._counts = counts;
     const maxNumElts = max reduce _counts;
     this._innerDom = {0 ..# batchSize, 0 ..# maxNumElts};
+  }
+  proc init(type eltType, batchSize : int, counts : [] int) {
+    init(eltType, batchSize, counts, counts.domain);
   }
 
   proc init(chunks : [] ?t)

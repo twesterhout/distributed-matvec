@@ -12,6 +12,7 @@ config const kVectors = "data/matvec/heisenberg_chain_10.h5";
 config const kAbsTol = 1e-14;
 config const kRelTol = 1e-12;
 config const kVerbose = false;
+config const kUseNew = false;
 
 proc approxEqual(a : real, b : real, atol = kAbsTol, rtol = kRelTol) {
   return abs(a - b) <= max(atol, rtol * max(abs(a), abs(b)));
@@ -60,7 +61,14 @@ proc main() {
 
   timer.clear();
   timer.start();
-  const x = vectorsFromBlockToHashed(basisStatesRaw, xRaw);
+  const masks = [x in basisStatesRaw] localeIdxOf(x);
+  timer.stop();
+  logDebug("Computing masks took ", timer.elapsed());
+
+  timer.clear();
+  timer.start();
+  const x = if kUseNew then arrFromBlockToHashed(masks, xRaw)
+                       else vectorsFromBlockToHashed(basisStatesRaw, xRaw);
   timer.stop();
   logDebug("Distributing X took ", timer.elapsed());
 
