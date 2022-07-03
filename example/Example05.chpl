@@ -25,8 +25,18 @@ proc main() {
   initRuntime();
   defer deinitRuntime();
 
+  var timer = new Timer();
+  timer.start();
   var matrix = loadHamiltonianFromYaml(kHamiltonian);
+  timer.stop();
+  logDebug("Reading the Hamiltonian took ", timer.elapsed());
+
+  timer.clear();
+  timer.start();
   var basisStates = enumerateStates(matrix.basis);
+  timer.stop();
+  logDebug("Enumerating basis states took ", timer.elapsed());
+
   // for (i, n) in zip(0 .., basisStates._counts) do
   //   writeln("basisStates: ", i, ": ", n, " -> ", n.locale);
   // matrix.basis.build();
@@ -36,9 +46,24 @@ proc main() {
   if kVerbose then
     writeln(basisStates);
 
+  timer.clear();
+  timer.start();
   const basisStatesRaw = statesFromHashedToBlock(basisStates);
+  timer.stop();
+  logDebug("Merging states took ", timer.elapsed());
+
+  timer.clear();
+  timer.start();
   const xRaw = readVectorsAsBlocks(kVectors, "/x");
+  timer.stop();
+  logDebug("Reading X took ", timer.elapsed());
+
+  timer.clear();
+  timer.start();
   const x = vectorsFromBlockToHashed(basisStatesRaw, xRaw);
+  timer.stop();
+  logDebug("Distributing X took ", timer.elapsed());
+
   // for (i, n) in zip(0 .., x._counts) do
   //   writeln("x: ", i, ": ", n, " -> ", n.locale);
   var z = new BlockVector(x.eltType, x._innerDom.dim(0).size, x._counts);
