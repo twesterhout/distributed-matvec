@@ -17,6 +17,15 @@ use Search;
 use AllLocalesBarriers;
 use CommDiagnostics;
 use Time;
+use Memory.Initialization;
+
+config const isRepresentativeBatchSize : int = 65536;
+config const enumerateStatesNumChunks : int = 10 * numLocales * here.maxTaskPar;
+config const statesFromHashedToBlockNumChunks = 7;
+config const statesFromBlockToHashedNumChunks = 7;
+config const kUseLowLevelComm : bool = true;
+config const numChunksPerLocale = 3;
+config const kVerboseComm : bool = false; 
 
 /* Get next integer with the same hamming weight.
 
@@ -63,7 +72,6 @@ private proc manyNextState(v: uint(64), bound: uint(64), buffer: [] uint(64),
 }
 
 
-config const isRepresentativeBatchSize : int = 65536;
 
 private inline iter findStatesInRange(in lower: uint(64), upper: uint(64),
                                       isHammingWeightFixed : bool,
@@ -109,13 +117,15 @@ proc determineEnumerationRanges(r : range(uint(64)), in numChunks : int,
   const totalSize = highIdx - lowIdx + 1;
   if numChunks > totalSize then
     numChunks = totalSize;
-  var ranges = newCyclicArr({0 ..# numChunks}, range(uint(64)));
+  var ranges : [0 ..# numChunks] range(uint(64));
+  // var ranges = newCyclicArr({0 ..# numChunks}, range(uint(64)));
   for (r, i) in zip(chunks(lowIdx .. highIdx, numChunks), 0..) {
     ranges[i] = unprojectedIndexToState(r.low, hammingWeight)
                   .. unprojectedIndexToState(r.high, hammingWeight);
   }
   timer.stop();
-  logDebug("determineEnumerationRanges took ", timer.elapsed());
+  // logDebug("determineEnumerationRanges(", r, ", ", numChunks, ", ", isHammingWeightFixed,
+  //          ") took ", timer.elapsed());
   return ranges;
 }
 
@@ -140,6 +150,46 @@ inline proc localeIdxOf(basisState : uint(64)) : int
 inline proc localeIdxOf(basisState : uint(64)) : int 
     where CHPL_COMM != "" {
   return (hash64_01(basisState) % numLocales:uint):int;
+}
+
+private proc _computeMasksAndCounts(const ref states, ref outMasks) {
+  const totalCount = states.size;
+  var counts : [0 ..# numLocales] int;
+
+  outMasks.resize(totalCount);
+  foreach i in 0 ..# totalCount {
+    const key = localeIdxOf(states[i]);
+    outMasks[i] = key:uint(8);
+    counts[key] += 1;
+  }
+  return counts;
+}
+
+private proc _enumerateStatesUnprojectedNew(r : range(uint(64)), const ref basis : Basis,
+                                            ref outStates, ref outMasks) {
+  const isHammingWeightFixed = basis.isHammingWeightFixed();
+  if isHammingWeightFixed && popcount(r.low) != popcount(r.high) then
+    halt("r.low=" + r.low:string + " and r.high=" + r.high:string
+        + " have different Hamming weight: " + popcount(r.low):string
+        + " vs. " + popcount(r.high):string);
+  const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
+  const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
+  const totalCount = highIdx - lowIdx + 1;
+
+  outStates.resize(totalCount);
+  var v = r.low;
+  if isHammingWeightFixed then
+    for i in 0 ..# totalCount {
+      outStates[i] = v;
+      v = nextStateFixedHamming(v);
+    }
+  else
+    for i in 0 ..# totalCount {
+      outStates[i] = v;
+      v = nextStateGeneral(v);
+    }
+
+  return _computeMasksAndCounts(outStates, outMasks);
 }
 
 private proc _enumerateStatesUnprojected(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
@@ -214,32 +264,36 @@ private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis, ref 
   }
 }
 
-proc _emptyVectors(type t) : [LocaleSpace] shared Vector(t)
-  { return [loc in LocaleSpace] new shared Vector(t); }
+proc _emptyVectors(type t)
+  // : [LocaleSpace] Vector(t)
+  { return [loc in LocaleSpace] new Vector(t); }
 
-config const enumerateStatesNumChunks : int = 10 * numLocales * here.maxTaskPar;
 
 proc enumerateStates(const ref basis : Basis, in numChunks : int, globalRange : range(uint(64))) {
-  // logDebug("enumerateStates");
   const isHammingWeightFixed = basis.isHammingWeightFixed();
   const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
   assert(ranges.size <= numChunks);
   numChunks = ranges.size; // We could have fewer elements in the range than numChunks.
                            // In such case, we limit numChunks
+
   const D = {0 ..# numChunks} dmapped Cyclic(startIdx=0);
-  var buckets: [D] [LocaleSpace] shared Vector(uint(64)) = [d in D] _emptyVectors(uint(64));
+  var buckets: [D] [LocaleSpace] Vector(uint(64)) = [d in D] _emptyVectors(uint(64));
   // noinit;
   // new Vector(uint(64));
- 
-  forall (r, i) in zip(ranges, 0..) {
+
+  startVerboseComm();
+  forall i in D {
+    // (r, i) in zip(ranges, 0..) {
+    const r = ranges[i];
     assert(here == buckets[i].locale);
     const localBasis = basis;
     _enumerateStates(r, localBasis, buckets[i]);
   }
+  stopVerboseComm();
 
   const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
-  var representatives : [OnePerLocale] shared Vector(uint(64)) =
-    [loc in OnePerLocale] new shared Vector(uint(64));
+  var representatives : [OnePerLocale] Vector(uint(64)) =
+    [loc in OnePerLocale] new Vector(uint(64));
   forall (vector, localeIdx) in zip(representatives, LocaleSpace) {
     vector.reserve(+ reduce [bucket in buckets] bucket[localeIdx].size);
     for bucket in buckets {
@@ -254,6 +308,259 @@ proc enumerateStates(const ref basis : Basis, numChunks : int = enumerateStatesN
   const upper = basis.maxStateEstimate();
   return enumerateStates(basis, numChunks, lower .. upper);
 }
+
+proc permuteBasedOnMasks(arrSize : int, masks : c_ptr(?maskType), arr : c_ptr(?eltType),
+                         counts : [] int, destOffsets : [] int,
+                         destPtrs : [] c_ptr(eltType)) {
+  if kVerboseComm then startVerboseCommHere();
+
+  var offsets : [0 ..# numLocales] int = prefixSum(counts);
+  var src : [0 ..# arrSize] eltType = noinit;
+  for i in 0 ..# arrSize {
+    const key = masks[i]:int;
+    src[offsets[key]] = arr[i];
+    offsets[key] += 1;
+  }
+
+  var copyTimer = new Timer();
+  copyTimer.start();
+  var i = 0;
+  for localeIdx in 0 ..# numLocales {
+    if counts[localeIdx] > 0 {
+      const srcPtr = c_ptrTo(src[i]);
+      const destPtr = destPtrs[localeIdx] + destOffsets[localeIdx];
+      const destSize = counts[localeIdx]:c_size_t * c_sizeof(eltType);
+      PUT(srcPtr, localeIdx, destPtr, destSize);
+      i += counts[localeIdx];
+    }
+  }
+  copyTimer.stop();
+
+  if kVerboseComm then stopVerboseCommHere();
+  return copyTimer.elapsed();
+}
+
+inline proc _enumStatesMakeBuckets(numChunks : int) {
+  const dom = {0 ..# numChunks} dmapped Cyclic(startIdx=0);
+  var buckets : [dom] (Vector(uint(64)), Vector(uint(8)));
+  return buckets;
+}
+
+proc _enumStatesComputeCounts(ref buckets,
+                              const ref ranges : [] range(uint(64)),
+                              const ref basis : Basis) {
+  assert(!basis.requiresProjection());
+  assert(basis.isStateIndexIdentity() || basis.isHammingWeightFixed());
+  assert(here.id == 0);
+
+  const numChunks = ranges.size;
+  var counts : [0 ..# numChunks, 0 ..# numLocales] int;
+  const countsPtr = c_ptrTo(counts[0, 0]);
+
+  if kVerboseComm then startVerboseComm();
+  var countsTimer = new Timer();
+  countsTimer.start();
+  const serializedBasis : string = basis.toJSON();
+  coforall loc in Locales do on loc {
+    const myBasis = new Basis(serializedBasis.localize());
+    const myRanges : [0 ..# numChunks] range(uint(64)) = ranges;
+    const mySubdomain = buckets.localSubdomain();
+
+    forall chunkIdx in mySubdomain {
+      ref (outStates, outMasks) = buckets.localAccess(chunkIdx);
+      // This is the actual computation!
+      const myCounts = _enumerateStatesUnprojectedNew(myRanges[chunkIdx], myBasis,
+                                                      outStates, outMasks);
+      // Copy computed chunks back to locale 0. We use low-level PUT, because
+      // Chapel generates bad code otherwise
+      const myCountsPtr = c_const_ptrTo(myCounts[0]);
+      const destPtr = countsPtr + chunkIdx * numLocales;
+      const destSize = numLocales:c_size_t * c_sizeof(int);
+      PUT(myCountsPtr, 0, destPtr, destSize);
+    }
+  }
+  countsTimer.stop();
+  if kVerboseComm then stopVerboseComm();
+
+  return (counts, countsPtr, countsTimer.elapsed());
+}
+
+proc _enumStatesCountsToOffsets(counts) {
+  const numChunks = counts.shape[0];
+
+  var offsets : [0 ..# numChunks, 0 ..# numLocales] int;
+  var totalCounts : [0 ..# numLocales] int;
+  foreach localeIdx in 0 ..# numLocales {
+    var total = 0;
+    for chunkIdx in 0 ..# numChunks {
+      offsets[chunkIdx, localeIdx] = total;
+      total += counts[chunkIdx, localeIdx];
+    }
+    totalCounts[localeIdx] = total;
+  }
+
+  return (offsets, totalCounts);
+}
+
+proc _enumStatesMakeMasksOffsets(counts) {
+  const numChunks = counts.shape[0];
+  var masksOffsets : [0 ..# numChunks + 1] int;
+  var total = 0;
+  for chunkIdx in 0 ..# numChunks {
+    masksOffsets[chunkIdx] = total;
+    total += (+ reduce counts[chunkIdx, ..]);
+  }
+  masksOffsets[numChunks] = total;
+  return masksOffsets;
+}
+
+proc _enumStatesMakeMasks(counts, totalCounts) {
+  const numChunks = counts.shape[0];
+  const numMasks = + reduce totalCounts;
+  const masksBox = {0 ..# numMasks};
+  const masksDom = masksBox dmapped Block(boundingBox=masksBox);
+  var masks : [masksDom] uint(8);
+  return masks;
+}
+
+proc _enumStatesPrepareDescriptors(masks, counts, totalCounts) {
+  const numChunks = counts.shape[0];
+  const masksOffsets = _enumStatesMakeMasksOffsets(counts);
+  const numMasks = masksOffsets[numChunks];
+  const ref masksDom = masks.domain;
+
+  var masksPtrs : [0 ..# numLocales] c_ptr(uint(8));
+  for loc in Locales {
+    ref x = masks[masks.localSubdomain(loc).low];
+    masksPtrs[loc.id] = __primitive("_wide_get_addr", x):c_ptr(uint(8));
+  }
+
+  var masksDescriptors : [0 ..# numChunks] (int, c_ptr(uint(8)));
+  for i in 0 ..# numChunks {
+    const firstIndex = masksOffsets[i];
+    const lastIndex = if i < numChunks - 1
+                        then masksOffsets[i + 1] - 1
+                        else numMasks - 1;
+    const loc = masksDom.dist.dsiIndexToLocale(firstIndex);
+    // The range firstIndex .. lastIndex crosses the locale boundary in masks
+    // array.
+    if loc != masksDom.dist.dsiIndexToLocale(lastIndex) then
+      masksDescriptors[i] = (firstIndex, nil);
+    else {
+      const ptrOffset = firstIndex - masksDom.localSubdomain(loc).low;
+      masksDescriptors[i] = (loc.id, masksPtrs[loc.id] + ptrOffset);
+    }
+  }
+  return masksDescriptors;
+}
+
+proc _enumStatesDistribute(const ref buckets, ref masks,
+                           const ref counts,
+                           const ref offsets,
+                           const ref basisStatesPtrs,
+                           const ref masksDescriptors) {
+  var copyTimes : [0 ..# numLocales] real;
+  var maskCopyTimes : [0 ..# numLocales] real;
+
+  var distributeTimer = new Timer();
+  distributeTimer.start();
+
+  const numChunks = counts.shape[0];
+  coforall loc in Locales do on loc {
+    const mySubdomain = buckets.localSubdomain();
+    const myCounts : [0 ..# numChunks, 0 ..# numLocales] int = counts;
+    const myOffsets : [0 ..# numChunks, 0 ..# numLocales] int = offsets;
+    const myDestPtrs : [0 ..# numLocales] c_ptr(uint(64)) = basisStatesPtrs;
+    const myMasksDescriptors : [0 ..# numChunks] (int, c_ptr(uint(8))) = masksDescriptors;
+
+    var myCopyTime : atomic real;
+    var myMaskCopyTime : atomic real;
+    forall bucketIdx in mySubdomain {
+      const ref (myStates, myMasks) = buckets.localAccess(bucketIdx);
+
+      const copyTime =
+        permuteBasedOnMasks(myStates.size,
+                            c_const_ptrTo(myMasks[0]),
+                            c_const_ptrTo(myStates[0]),
+                            myCounts[bucketIdx, ..],
+                            myOffsets[bucketIdx, ..],
+                            myDestPtrs);
+      myCopyTime.add(copyTime, memoryOrder.relaxed);
+
+      var timer = new Timer();
+      timer.start();
+      const (localeOrOffset, targetPtr) = myMasksDescriptors[bucketIdx];
+      if targetPtr != nil {
+        const targetLocaleIdx = localeOrOffset;
+        PUT(c_const_ptrTo(myMasks._arr[0]), targetLocaleIdx, targetPtr,
+            myMasks.size:c_size_t * c_sizeof(uint(8)));
+      }
+      else {
+        const targetOffset = localeOrOffset;
+        masks[targetOffset ..# myMasks.size] = myMasks.toArray();
+      }
+      timer.stop();
+      myMaskCopyTime.add(timer.elapsed(), memoryOrder.relaxed);
+    }
+
+    copyTimes[loc.id] = myCopyTime.read();
+    maskCopyTimes[loc.id] = myMaskCopyTime.read();
+  }
+  distributeTimer.stop();
+
+  return (distributeTimer.elapsed(), copyTimes, maskCopyTimes);
+}
+
+proc enumerateStatesNew(ranges : [] range(uint(64)), const ref basis : Basis) {
+  var timer = new Timer();
+  timer.start();
+
+  // We distribute ranges among locales using Cyclic distribution to ensure
+  // an even workload. For each range, a vector of basis states and a vector of
+  // masks is computed. Masks indicate on which locale a basis state should live.
+  const numChunks = ranges.size;
+  var buckets = _enumStatesMakeBuckets(numChunks);
+
+  // How many states coming from a certain chunk live on a certain locale.
+  // Each chunk computes its own row in parallel and then does a remote PUT here.
+  const (counts, countsPtr, countsTime) = _enumStatesComputeCounts(buckets, ranges, basis);
+
+  // Transform counts into offsets such that each task known where to copy data.
+  // Total counts tell us how much memory we have to allocate on each locale.
+  const (offsets, totalCounts) = _enumStatesCountsToOffsets(counts);
+
+  // Allocate space for states
+  var basisStates = new BlockVector(uint(64), totalCounts, distribute=true);
+  const basisStatesPtrs = basisStates._dataPtrs;
+  // Allocate space for masks
+  var masks = _enumStatesMakeMasks(counts, totalCounts);
+  var masksDescriptors =
+    _enumStatesPrepareDescriptors(masks, counts, totalCounts);
+
+  // Distribute buckets to basisStates and maks
+  const (distributeTime, copyTimes, maskCopyTimes) =
+    _enumStatesDistribute(buckets, masks, counts, offsets, basisStatesPtrs, masksDescriptors);
+
+  timer.stop();
+  logDebug("enumerateStatesNew took ", timer.elapsed(), "\n",
+           "    from which ", countsTime, " were spent computing counts\n",
+           "           and ", distributeTime, " shuffling stuff around\n",
+           "  time in PUTs ", copyTimes, "\n",
+           "               ", maskCopyTimes, " copying masks");
+  return (basisStates, masks);
+}
+proc enumerateStatesNew(globalRange : range(uint(64)), const ref basis : Basis,
+                        numChunks : int = enumerateStatesNumChunks) {
+  const isHammingWeightFixed = basis.isHammingWeightFixed();
+  const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
+  return enumerateStatesNew(ranges, basis);
+}
+proc enumerateStatesNew(const ref basis : Basis, numChunks : int = enumerateStatesNumChunks) {
+  const lower = basis.minStateEstimate();
+  const upper = basis.maxStateEstimate();
+  return enumerateStatesNew(lower .. upper, basis, numChunks);
+}
+
 
 export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
                                               lower : uint(64),
@@ -324,7 +631,7 @@ proc mergeBoundsToIndexRanges(const ref basisStates : [] uint(64),
 proc determineMergeRanges(const ref basisStates : BlockVector(uint(64), 1), numChunks : int) {
   // logDebug("determineMergeRanges: numStates=" + (+ reduce basisStates._counts):string);
   const bounds = determineMergeBounds(basisStates[here], numChunks);
-  var ranges : [basisStates._outerDom] [0 ..# bounds.size] range(int);
+  var ranges : [basisStates.outerDom] [0 ..# bounds.size] range(int);
   forall (r, i) in zip(ranges, 0 ..) {
     const localBounds = bounds;
     r = mergeBoundsToIndexRanges(basisStates.getBlock(i), localBounds);
@@ -349,10 +656,12 @@ iter parallelMergeRangesIterator(basisStates : BlockVector(uint(64), 1), numChun
 iter parallelMergeRangesIterator(param tag: iterKind, basisStates : BlockVector(uint(64), 1),
                                  in numChunks : int)
     where tag == iterKind.standalone {
-  const maxNumChunks = min reduce basisStates._counts;
+  const maxNumChunks = min reduce basisStates.counts;
   if numChunks > maxNumChunks then
     numChunks = maxNumChunks;
 
+  var timer = new Timer();
+  timer.start();
   const ranges = determineMergeRanges(basisStates, numChunks);
   const offsets = mergeRangesToOffsets(ranges);
   const numRanges = offsets.size - 1;
@@ -361,6 +670,8 @@ iter parallelMergeRangesIterator(param tag: iterKind, basisStates : BlockVector(
 
   const space = {0 ..# numStates};
   const dom = space dmapped Block(boundingBox=space);
+  timer.stop();
+  logDebug("parallelMergeRangesIterator spent ", timer.elapsed(), " setting up");
 
   coforall rangeIdx in 0 ..# numRanges {
     const loc = dom.dist.dsiIndexToLocale(offsets[rangeIdx]);
@@ -373,31 +684,82 @@ iter parallelMergeRangesIterator(param tag: iterKind, basisStates : BlockVector(
   }
 }
 
-config const statesFromHashedToBlockNumChunks = 7;
 
 proc statesFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1)) {
-  const numStates = + reduce basisStates._counts;
+  const numStates = + reduce basisStates.counts; // + reduce basisStates._counts;
   const space = {0 ..# numStates};
   const dom = space dmapped Block(boundingBox=space);
   var blockBasisStates : [dom] uint(64);
+  var blockBasisStatesPtrs : [0 ..# numLocales] c_ptr(uint(64));
+  coforall loc in Locales do on loc {
+    const mySubdomain = blockBasisStates.localSubdomain();
+    blockBasisStatesPtrs[loc.id] = c_ptrTo(blockBasisStates[mySubdomain.low]);
+  }
+  const blockBasisStatesPtrsPtr = c_ptrTo(blockBasisStatesPtrs);
+
+  const basisStatesDataPtrsPtr = c_ptrTo(basisStates._dataPtrs[0]);
 
   forall (currentRange, currentChunks) in
       parallelMergeRangesIterator(basisStates, statesFromHashedToBlockNumChunks) {
+    var timer = new Timer();
+
+    // timer.start();
     const currentCounts = [chunk in currentChunks] chunk.size;
-    var localBasisStates = new BlockVector(uint(64), currentCounts);
+    var localBasisStates = new BlockVector(uint(64), currentCounts, distribute=false);
+    // timer.stop();
+    // logDebug("statesFromHashedToBlock spent ", timer.elapsed(), " setting up");
+
     // Get data from remote
-    forall (i, chunk) in zip(LocaleSpace, currentChunks) {
-      localBasisStates._data[i][0 ..# chunk.size] = basisStates._data[i][chunk];
+    timer.clear();
+    timer.start();
+    var basisStatesDataPtrs : [0 ..# numLocales] c_ptr(uint(64));
+    if kUseLowLevelComm then
+      GET(c_ptrTo(basisStatesDataPtrs[0]), 0, basisStatesDataPtrsPtr,
+          numLocales:c_size_t * c_sizeof(c_ptr(uint(64))));
+    for (i, chunk) in zip(0 ..# numLocales, currentChunks) {
+      if kUseLowLevelComm then
+        if chunk.size > 0 {
+          const destPtr = c_ptrTo(localBasisStates[i, 0]);
+          const destSize = chunk.size:c_size_t * c_sizeof(uint(64));
+          const srcPtr = basisStatesDataPtrs[i] + chunk.low;
+          GET(destPtr, i, srcPtr, destSize);
+        }
+      else
+        localBasisStates._locBlocks[i][0 ..# chunk.size] = basisStates._locBlocks[i][chunk];
     }
+    timer.stop();
+    logDebug("statesFromHashedToBlock spent ", timer.elapsed(), " downloading");
 
     // Perform local merge
+    timer.clear();
+    timer.start();
     var mergedStates : [0 ..# currentRange.size] uint(64) = noinit;
-    for ((chunkIndex, indexInChunk), offset) in zip(kMergeIndices(localBasisStates), 0..) {
-      mergedStates[offset] = localBasisStates._data[chunkIndex][indexInChunk];
+    local {
+      for ((chunkIndex, indexInChunk), offset) in zip(kMergeIndices(localBasisStates), 0..) {
+        mergedStates[offset] = localBasisStates[chunkIndex, indexInChunk];
+      }
     }
+    timer.stop();
+    logDebug("statesFromHashedToBlock spent ", timer.elapsed(), " merging");
     
     // Copy to remote
-    blockBasisStates[currentRange] = mergedStates;
+    timer.clear();
+    timer.start();
+    var blockBasisStatesPtrs : [0 ..# numLocales] c_ptr(uint(64));
+    if kUseLowLevelComm then
+      GET(c_ptrTo(blockBasisStatesPtrs[0]), 0, basisStatesDataPtrsPtr,
+          numLocales:c_size_t * c_sizeof(c_ptr(uint(64))));
+    // const targetLocale =
+    //   blockBasisStates.domain.dist.dsiIndexToLocale(currentRange.low);
+    // const targetSubdomain = blockBasisStates.localSubdomain(targetLocale);
+    // if targetSubdomain.contains(currentRange) {
+    //   
+    // }
+    // else {
+      blockBasisStates[currentRange] = mergedStates;
+    // }
+    timer.stop();
+    logDebug("statesFromHashedToBlock spent ", timer.elapsed(), " uploading");
   }
 
   return blockBasisStates;
@@ -413,8 +775,8 @@ proc makeBlockDomainForVectors(numVectors, numStates) {
 
 proc vectorsFromHashedToBlock(const ref basisStates : BlockVector(uint(64), 1),
                               const ref vectors : BlockVector(?eltType, 2)) {
-  const numVectors = vectors._innerDom.dim(0).size;
-  const numStates = + reduce basisStates._counts;
+  const numVectors = vectors.innerDom.dim(0).size;
+  const numStates = + reduce basisStates.counts;
   const dom = makeBlockDomainForVectors(numVectors, numStates);
   var blockVectors : [dom] eltType;
 
@@ -504,7 +866,6 @@ private proc distributionCounts(const ref basisStates : [] uint(64)) {
 }
 
 
-config const statesFromBlockToHashedNumChunks = 7;
 
 proc statesFromBlockToHashed(const ref basisStates : [] uint(64)) {
   const counts = distributionCounts(basisStates);
@@ -635,9 +996,6 @@ proc vectorsFromBlockToHashed(const ref basisStates : [] uint(64),
 }
 
 
-config const numChunksPerLocale = 3;
-config const kUseLowLevelComm : bool = true;
-config const kVerboseComm : bool = false; 
 
 inline proc GET(addr, node, rAddr, size) {
   __primitive("chpl_comm_get", addr, node, rAddr, size);
@@ -756,15 +1114,15 @@ proc permuteSmall(arrSize : int, masks : c_ptr(int), arr : c_ptr(?eltType),
 
 proc _makeDestArr(arr : [] ?eltType, perLocaleCount)
     where arr.domain.rank == 1 {
-  const dom = LocaleSpace dmapped Block(LocaleSpace, Locales);
+  // const dom = LocaleSpace dmapped Block(LocaleSpace, Locales);
   const destCounts = [i in 0 ..# numLocales] (+ reduce perLocaleCount[.., i]);
-  return new BlockVector(eltType, destCounts, dom);
+  return new BlockVector(eltType, destCounts);
 }
 proc _makeDestArr(arr : [] ?eltType, perLocaleCount)
     where arr.domain.rank == 2 {
-  const dom = LocaleSpace dmapped Block(LocaleSpace, Locales);
+  // const dom = LocaleSpace dmapped Block(LocaleSpace, Locales);
   const destCounts = [i in 0 ..# numLocales] (+ reduce perLocaleCount[.., i]);
-  return new BlockVector(eltType, arr.shape[0], destCounts, dom);
+  return new BlockVector(eltType, arr.shape[0], destCounts);
 }
 
 proc arrFromBlockToHashed(masks : [] int, arr : [] ?eltType) {
@@ -792,7 +1150,7 @@ proc arrFromBlockToHashed(masks : [] int, arr : [] ?eltType) {
   if kVerboseComm then startVerboseComm();
   const batchSize = if arr.domain.rank == 1 then 1 else arr.shape[0];
   const batchIncrement = if arr.domain.rank == 1
-                           then 0 else destArr._innerDom.shape[1];
+                           then 0 else destArr.innerDom.shape[1];
 
   setupTimer.stop();
   logDebug("arrFromBlockToHashed setup stage took ", setupTimer.elapsed(), "\n",
@@ -800,7 +1158,7 @@ proc arrFromBlockToHashed(masks : [] int, arr : [] ?eltType) {
            " were spent in _makeDestArr");
 
   coforall loc in Locales do on loc {
-    const _myPtr : c_ptr(eltType) = c_ptrTo(destArr._data[loc.id][destArr._innerDom.low]);
+    const _myPtr : c_ptr(eltType) = c_ptrTo(destArr[loc.id, destArr.innerDom.low]);
     if kUseLowLevelComm then
       PUT(c_const_ptrTo(_myPtr), 0, destPtrsPtr + loc.id, c_sizeof(c_ptr(eltType)));
     else
