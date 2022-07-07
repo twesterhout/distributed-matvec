@@ -33,9 +33,8 @@ proc main() {
 
   // timer.clear();
   // timer.start();
-  var __t = enumerateStates(matrix.basis);
-  const ref basisStates = __t[0];
-  const ref masks = __t[1];
+  const masks;
+  const basisStates = enumerateStates(matrix.basis, masks);
   // timer.stop();
   // logDebug("Enumerating basis states took ", timer.elapsed());
 

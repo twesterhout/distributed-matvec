@@ -12,10 +12,8 @@ proc main() {
   var basis0 = new Basis("{\"number_spins\": " + kNumSpins:string
                         + ", \"hamming_weight\": " + (kNumSpins / 2):string
                         + "}");
-  var r = enumerateStates(basis0);
-  const ref buckets0 = r[0];
-  const ref masks0 = r[1];
-  // var (buckets0, masks0) = ;
+  const masks0;
+  const buckets0 = enumerateStates(basis0, masks0);
 
   const batchSize = 3;
   var fakeVectors = new BlockVector(real(64), batchSize, buckets0.counts);

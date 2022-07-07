@@ -69,11 +69,6 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
 
   const chunkSize = (representatives.size + numChunks - 1) / numChunks;
   logDebug("Local dimension=", representatives.size, ", chunkSize=", chunkSize);
-  // Used to calculate the action of matrix on a chunk of basis elements.
-  // batchedOperator stores some task-local buffers and a pointer to `matrix`.
-  // var batchedOperator = new BatchedOperator(matrix, chunkSize);
-  // Used to then process the matrix elements.
-  // logDebug("new ConcurrentAccessor: " + y.locale:string);
   var accessor = new ConcurrentAccessor(y);
   globalPtrStore[here.id] = (c_const_ptrTo(matrix.basis), c_ptrTo(accessor));
   allLocalesBarrier.barrier();
@@ -106,15 +101,8 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
     staging.add(n, basisStatesPtr, coeffsPtr);
     timer.stop();
     stagingAddTime.add(timer.elapsed(), memoryOrder.relaxed);
-
-    // timer.clear();
-    // timer.start();
-    // staging.flush();
-    // timer.stop();
-    // stagingFlushTime.add(timer.elapsed(), memoryOrder.relaxed);
   }
 
-  // logDebug("Draining ...");
   var queueTimer = new Timer();
   queueTimer.start();
   queue.drain();
@@ -137,16 +125,6 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
            "  │               └─ ", queue.flushBufferRemoteTime, " in remote tasks\n",
            "  │                   └─ ", queue.localProcessTimeRemote, " in localProcess on remote\n",
            "  └─ ", queueDrainTime, " in queue.drain\n");
-  // logDebug("Spent ", queue.flushBufferRemoteTime, " in queue._flushBuffer (remote part)");
-  // logDebug("Spent ", queue.enqueueUnsafeTime, " in queue._enqueueUnsafe");
-  // logDebug("Spent ", queue.enqueueTime, " in queue.enqueue");
-  // logDebug("Spent ", queue.localProcessTime, " in localProcess");
-  // logDebug("Spent ", globalLocalProcessTime[here.id][0].read(), " in localProcess (all, indexing)");
-  // logDebug("Spent ", globalLocalProcessTime[here.id][1].read(), " in localProcess (all, allocate)");
-  // logDebug("Spent ", globalLocalProcessTime[here.id][2].read(), " in localProcess (all, accessing)");
-  // logDebug("Spent ", queue._remoteBuffers.localProcessTime, " in remoteLocalProcess");
-  // logDebug("Frequency ", frequency.read() / norm.read());
-  // logDebug("Processed ", queue!.numRemoteCalls.read(), " remote jobs");
 }
 
 private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
