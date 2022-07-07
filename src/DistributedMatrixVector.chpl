@@ -35,6 +35,7 @@ private proc localDiagonalBatch(indices : range(int, BoundedRangeType.bounded, f
 
 config const matrixVectorDiagonalNumChunks : int = 10 * here.maxTaskPar;
 config const matrixVectorOffDiagonalNumChunks : int = 150 * here.maxTaskPar;
+config const matrixVectorMainLoopNumTasks : int = here.maxTaskPar;
 
 private proc localDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                            const ref representatives : [] uint(64),
@@ -62,7 +63,7 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
   var computeOffDiagTime : atomic real;
   var stagingAddTime : atomic real;
   var stagingFlushTime : atomic real;
-  var queueDrainTime : atomic real;
+  var queueDrainTime : real;
   var initTimer = new Timer();
   initTimer.start();
 
@@ -83,7 +84,8 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
     chunks(0 ..# representatives.size, numChunks);
   initTimer.stop();
   initTime += initTimer.elapsed();
-  forall rangeIdx in dynamic(0 ..# numChunks, chunkSize=1)
+  forall rangeIdx in dynamic(0 ..# numChunks, chunkSize=1,
+                             numTasks=matrixVectorMainLoopNumTasks)
               // ranges
                      with (ref queue,
                            var batchedOperator = new BatchedOperator(matrix, chunkSize),
@@ -97,49 +99,51 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
         r.size, c_const_ptrTo(representatives[r.low]), c_const_ptrTo(x[r.low]));
     const n = offsetsPtr[r.size];
     timer.stop();
-    computeOffDiagTime.add(timer.elapsed());
-    timer.clear();
+    computeOffDiagTime.add(timer.elapsed(), memoryOrder.relaxed);
 
+    timer.clear();
     timer.start();
     staging.add(n, basisStatesPtr, coeffsPtr);
     timer.stop();
-    stagingAddTime.add(timer.elapsed());
-    timer.clear();
+    stagingAddTime.add(timer.elapsed(), memoryOrder.relaxed);
 
-    timer.start();
-    staging.flush();
-    timer.stop();
-    stagingFlushTime.add(timer.elapsed());
-
-    // if staging.totalCount > 0 {
-    //   frequency.add(staging.sameCount:real / staging.totalCount:real);
-    //   norm.add(1);
-    // }
+    // timer.clear();
+    // timer.start();
+    // staging.flush();
+    // timer.stop();
+    // stagingFlushTime.add(timer.elapsed(), memoryOrder.relaxed);
   }
+
   // logDebug("Draining ...");
   var queueTimer = new Timer();
   queueTimer.start();
   queue.drain();
   queueTimer.stop();
-  queueDrainTime.add(queueTimer.elapsed());
+  queueDrainTime += queueTimer.elapsed();
 
   allLocalesBarrier.barrier();
   timer.stop();
-  logDebug("Spent ", timer.elapsed(), " in the body of localOffDiagonal");
-  logDebug("Spent ", initTime, " in initialization");
-  logDebug("Spent ", computeOffDiagTime, " in computeOffDiag");
-  logDebug("Spent ", stagingAddTime, " in staging.add");
-  logDebug("Spent ", stagingFlushTime, " in staging.flush");
-  logDebug("Spent ", queueDrainTime, " in queue.drain");
-  logDebug("Spent ", queue.flushBufferLocalTime, " in queue._flushBuffer (local part)");
-  logDebug("Spent ", queue.flushBufferPutTime, " in queue._flushBuffer (put part)");
-  logDebug("Spent ", queue.flushBufferRemoteTime, " in queue._flushBuffer (remote part)");
-  logDebug("Spent ", queue.enqueueUnsafeTime, " in queue._enqueueUnsafe");
-  logDebug("Spent ", queue.enqueueTime, " in queue.enqueue");
-  logDebug("Spent ", queue.localProcessTime, " in localProcess");
-  logDebug("Spent ", globalLocalProcessTime[here.id][0].read(), " in localProcess (all, indexing)");
-  logDebug("Spent ", globalLocalProcessTime[here.id][1].read(), " in localProcess (all, allocate)");
-  logDebug("Spent ", globalLocalProcessTime[here.id][2].read(), " in localProcess (all, accessing)");
+  logDebug("localOffDiagonal took ", timer.elapsed(), "\n",
+           "  ├─ ", initTime, " in initialization\n",
+           "  ├─ ", computeOffDiagTime, " in computeOffDiag (total)\n",
+           "  ├─ ", stagingAddTime, " in staging.add (total)\n",
+           "  │   └─ ", queue.enqueueTime, " in queue.enqueue\n",
+           "  │       ├─ ", queue.localProcessTimeHere, " in localProcess on here\n",
+           "  │       ├─ ", queue.lockWaitingTimeHere, " waiting for queue.lock\n",
+           "  │       └─ ", queue.enqueueUnsafeTime, " in queue._enqueueUnsafe\n",
+           "  │           └─ ", queue.flushBufferTime, " in queue._flushBuffer\n",
+           "  │               ├─ ", queue.lockWaitingTimeRemote, " waiting for remoteBuffer.lock\n",
+           "  │               ├─ ", queue.flushBufferPutTime, " in remote PUTs\n",
+           "  │               └─ ", queue.flushBufferRemoteTime, " in remote tasks\n",
+           "  │                   └─ ", queue.localProcessTimeRemote, " in localProcess on remote\n",
+           "  └─ ", queueDrainTime, " in queue.drain\n");
+  // logDebug("Spent ", queue.flushBufferRemoteTime, " in queue._flushBuffer (remote part)");
+  // logDebug("Spent ", queue.enqueueUnsafeTime, " in queue._enqueueUnsafe");
+  // logDebug("Spent ", queue.enqueueTime, " in queue.enqueue");
+  // logDebug("Spent ", queue.localProcessTime, " in localProcess");
+  // logDebug("Spent ", globalLocalProcessTime[here.id][0].read(), " in localProcess (all, indexing)");
+  // logDebug("Spent ", globalLocalProcessTime[here.id][1].read(), " in localProcess (all, allocate)");
+  // logDebug("Spent ", globalLocalProcessTime[here.id][2].read(), " in localProcess (all, accessing)");
   // logDebug("Spent ", queue._remoteBuffers.localProcessTime, " in remoteLocalProcess");
   // logDebug("Frequency ", frequency.read() / norm.read());
   // logDebug("Processed ", queue!.numRemoteCalls.read(), " remote jobs");

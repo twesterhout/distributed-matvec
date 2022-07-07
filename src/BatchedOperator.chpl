@@ -34,7 +34,7 @@ private proc localCompressMultiply(batchSize : int, numberTerms : int,
   // offsets[batchSize] = batchSize * numberTerms;
 }
 
-config const batchedOperatorNewKernel = false;
+config const batchedOperatorNewKernel = true;
 
 record BatchedOperator {
   var _matrixPtr : c_ptr(Operator);
@@ -66,10 +66,10 @@ record BatchedOperator {
     this._dom = other._dom;
   }
 
-  proc deinit() {
-    logDebug("BatchedOperator spent ", compressTime, " in localCompressMultiply and ", offDiagTime,
-             " in apply_off_diag");
-  }
+  // proc deinit() {
+    // logDebug("BatchedOperator spent ", compressTime, " in localCompressMultiply and ",
+    //          offDiagTime, " in apply_off_diag");
+  // }
 
   proc computeOffDiag(count : int,
                       alphas : c_ptr(uint(64)),
