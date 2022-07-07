@@ -49,7 +49,7 @@ record ConcurrentAccessor {
     // const blockIdx = _blockIdx(i);
     // ref lock = _locks[blockIdx];
     // lock.lock();
-    _data[i].add(x);
+    _data[i].add(x, order=memoryOrder.relaxed);
     // lock.unlock();
   }
 }

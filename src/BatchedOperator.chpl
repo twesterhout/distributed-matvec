@@ -1,6 +1,8 @@
 module BatchedOperator {
 
 use CTypes;
+use Time;
+
 use FFI;
 use ForeignTypes;
 
@@ -9,28 +11,30 @@ private proc localCompressMultiply(batchSize : int, numberTerms : int,
                                    sigmas : c_ptr(uint(64)), cs : c_ptr(complex(128)),
                                    xs : c_ptr(?eltType), offsets : c_ptr(int)) {
   var offset : int = 0;
-  // var i : int = 0;
+  var i : int = 0;
 
-  // offsets[0] = 0;
+  offsets[0] = 0;
   for batchIdx in 0 ..# batchSize {
-    foreach termIdx in 0 ..# numberTerms {
-      cs[batchIdx * numberTerms + termIdx] *= xs[batchIdx];
-    }
-    // for termIdx in 0 ..# numberTerms {
-      // if (cs[i] != 0) {
-      //   if (i > offset) {
-      //     cs[offset] = cs[i];
-      //     sigmas[offset] = sigmas[i];
-      //   }
-      //  cs[offset] *= xs[batchIdx];
-      //  offset += 1;
-      // }
-      // i += 1;
+    // foreach termIdx in 0 ..# numberTerms {
+    //   cs[batchIdx * numberTerms + termIdx] *= xs[batchIdx];
     // }
-    // offsets[batchIdx + 1] = offset;
+    for termIdx in 0 ..# numberTerms {
+      if (cs[i] != 0) {
+        if (i > offset) {
+          cs[offset] = cs[i];
+          sigmas[offset] = sigmas[i];
+        }
+        cs[offset] *= xs[batchIdx];
+        offset += 1;
+      }
+      i += 1;
+    }
+    offsets[batchIdx + 1] = offset;
   }
-  offsets[batchSize] = batchSize * numberTerms;
+  // offsets[batchSize] = batchSize * numberTerms;
 }
+
+config const batchedOperatorNewKernel = true;
 
 record BatchedOperator {
   var _matrixPtr : c_ptr(Operator);
@@ -43,6 +47,8 @@ record BatchedOperator {
   var _coeffs2 : [_dom] complex(128);
   var _norms : [_dom] real(64);
   var _offsets : [0 ..# batchSize + 1] int;
+  var offDiagTime : real;
+  var compressTime : real;
 
   proc init(const ref matrix : Operator, batchSize : int) {
     this._matrixPtr = c_const_ptrTo(matrix);
@@ -60,6 +66,11 @@ record BatchedOperator {
     this._dom = other._dom;
   }
 
+  // proc deinit() {
+    // logDebug("BatchedOperator spent ", compressTime, " in localCompressMultiply and ",
+    //          offDiagTime, " in apply_off_diag");
+  // }
+
   proc computeOffDiag(count : int,
                       alphas : c_ptr(uint(64)),
                       xs : c_ptr(?eltType))
@@ -75,19 +86,60 @@ record BatchedOperator {
       // at this point j ∈ {0 ..# _numberOffDiagTerms}. Both cᵢⱼ and |βᵢⱼ⟩ are
       // conceptually 2-dimensional arrays, but we use flattened
       // representations of them.
-      ls_hs_operator_apply_off_diag_kernel(
-        matrix.payload,
-        count,
-        alphas, 1,
-        betas, 1,
-        cs);
+      var timer = new Timer();
+      timer.start();
+      if !batchedOperatorNewKernel {
+        ls_hs_operator_apply_off_diag_kernel(
+          matrix.payload,
+          count,
+          alphas, 1,
+          betas, 1,
+          cs);
+      }
+      else {
+        ls_internal_operator_apply_off_diag_x1(
+          matrix.payload,
+          count,
+          alphas,
+          betas,
+          cs,
+          offsets,
+          xs);
+        // logDebug("totalCount=", totalCount);
+        // foreach i in 0 ..# count + 1 {
+        //   offsets[i] = totalCount;
+        // }
+        // offsets[count] = totalCount;
+        // for i in 0 ..# totalCount {
+        //   write(" ", (betas[i], cs[i]));
+        // }
+        // writeln();
+        // halt("oops");
+      }
+      timer.stop();
+      offDiagTime += timer.elapsed();
       // Since many cᵢⱼ could be zero, we compress |βᵢⱼ⟩ and cᵢⱼ arrays by
       // throwing away all zero elements. Furthermore, we multiply each cᵢⱼ by
       // the corresponding xᵢ since we have to do it at some point anyway.
-      localCompressMultiply(
-        count, _numberOffDiagTerms,
-        betas, cs, xs,
-        offsets);
+      if !batchedOperatorNewKernel {
+        timer.clear();
+        timer.start();
+        localCompressMultiply(
+          count, _numberOffDiagTerms,
+          betas, cs, xs,
+          offsets);
+        timer.stop();
+        compressTime += timer.elapsed();
+        // for i in 0 ..# count {
+        //   write(i, " ");
+        //   for j in offsets[i] .. offsets[i + 1] - 1 {
+        //     write(" ", (betas[j], cs[j]));
+        //   }
+        //   writeln();
+        // }
+        // halt("oops");
+      }
+      // assert(totalCount == offsets[count]);
       return (betas, cs, offsets);
     }
     // The tricky case when we have to project betas first

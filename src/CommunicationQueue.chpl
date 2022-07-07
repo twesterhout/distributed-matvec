@@ -26,20 +26,23 @@ inline proc PUT(addr, node, rAddr, size) {
   __primitive("chpl_comm_put", addr, node, rAddr, size);
 }
 
-var globalLocalProcessTime : [LocaleSpace dmapped Block(LocaleSpace)] (atomic real, atomic real, atomic real);
+// var globalLocalProcessTime : [LocaleSpace dmapped Block(LocaleSpace)]
+//                                 (atomic real, atomic real, atomic real);
 
 proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccessor(?coeffType)),
-                  basisStates : c_ptr(uint(64)), coeffs : c_ptr(coeffType), size : int) {
-  var indexingTimer = new Timer();
+                  basisStates : c_ptr(uint(64)), coeffs : c_ptr(?t), size : int) {
+  var timer = new Timer();
+  timer.start();
   var allocateTimer = new Timer();
+  var indexingTimer = new Timer();
   var accessTimer = new Timer();
   local {
-    assert(basisPtr != nil);
-    assert(accessorPtr != nil);
+    // assert(basisPtr != nil);
+    // assert(accessorPtr != nil);
 
     // count == 0 has to be handled separately because c_ptrTo(indices) fails
     // when the size of indices is 0.
-    if size == 0 then return;
+    if size == 0 then return (0, 0, 0, 0);
 
     // TODO: is the fact that we're allocating `indices` over and over again
     // okay performance-wise?
@@ -57,7 +60,7 @@ proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccesso
     ref accessor = accessorPtr.deref();
     foreach k in 0 ..# size {
       const i = indices[k];
-      const c = coeffs[k];
+      const c = coeffs[k]:coeffType;
       // Importantly, the user could have made a mistake and given us an
       // operator which does not respect the basis symmetries. Then we could
       // have that a |σ⟩ was generated that doesn't belong to our basis. In
@@ -67,10 +70,13 @@ proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccesso
     }
     accessTimer.stop();
   }
-  ref myTimes = globalLocalProcessTime[here.id];
-  myTimes[0].add(indexingTimer.elapsed());
-  myTimes[1].add(allocateTimer.elapsed());
-  myTimes[2].add(accessTimer.elapsed());
+  timer.stop();
+  return (timer.elapsed(), allocateTimer.elapsed(),
+          indexingTimer.elapsed(), accessTimer.elapsed());
+  // ref myTimes = globalLocalProcessTime[here.id];
+  // myTimes[0].add(indexingTimer.elapsed());
+  // myTimes[1].add(allocateTimer.elapsed());
+  // myTimes[2].add(accessTimer.elapsed());
 }
 // inline proc localProcess(const ref sigmas : [] uint(64),
 //                          const ref coeffs : [] complex(128)) {
@@ -98,12 +104,15 @@ class CommunicationQueue {
   // var _basisPtr : c_ptr(Basis);
   // var _accessorPtr : c_ptr(ConcurrentAccessor(eltType));
   // var numRemoteCalls : atomic int;
-  var flushBufferLocalTime : atomic real;
+  var flushBufferTime : atomic real;
   var flushBufferPutTime : atomic real;
   var flushBufferRemoteTime : atomic real;
   var enqueueUnsafeTime : atomic real;
   var enqueueTime : atomic real;
-  var localProcessTime : atomic real;
+  var lockWaitingTimeHere : atomic real;
+  var lockWaitingTimeRemote : atomic real;
+  var localProcessTimeHere : atomic real;
+  var localProcessTimeRemote : atomic real;
 
   proc init(type coeffType, ptrStore : [] (c_ptr(Basis), c_ptr(ConcurrentAccessor(coeffType)))) {
     this.coeffType = coeffType;
@@ -120,83 +129,77 @@ class CommunicationQueue {
 
   proc _flushBuffer(localeIdx : int, release : bool = false) {
     var timer = new Timer();
+    var lockWaitingTimer = new Timer();
+    var putTimer = new Timer();
+    var remoteTimer = new Timer();
     timer.start();
 
     ref size = _sizes[localeIdx];
-    // logDebug("processOnRemote(" + localeIdx:string + ") ...");
     const mySize = size;
     if mySize == 0 {
       if release then _unlock(localeIdx);
 
       timer.stop();
-      flushBufferLocalTime.add(timer.elapsed());
+      flushBufferTime.add(timer.elapsed(), memoryOrder.relaxed);
       return;
     }
 
     ref remoteBuffer = _remoteBuffers[localeIdx];
+    lockWaitingTimer.start();
     remoteBuffer.lock.lock();
-    var putTimer = new Timer();
+    lockWaitingTimer.stop();
     putTimer.start();
     remoteBuffer.put(_basisStates[localeIdx], _coeffs[localeIdx], mySize);
     putTimer.stop();
-    flushBufferPutTime.add(putTimer.elapsed());
     
     const remoteBasis = _bases[localeIdx];
     const remoteAccessor = _accessors[localeIdx];
     const remoteBasisStates = remoteBuffer.basisStates;
     const remoteCoeffs = remoteBuffer.coeffs;
-    const remoteLocalProcessTimePtr = c_ptrTo(remoteBuffer.localProcessTime);
+
     size = 0;
+    if release then _unlock(localeIdx);
 
-    if release {
-      _unlock(localeIdx);
-    }
-
-    timer.stop();
-    var rTimer = new Timer();
-    rTimer.start();
+    remoteTimer.start();
+    var localProcessTime : real;
+    const localProcessTimePtr = c_ptrTo(localProcessTime);
+    const mainLocaleIdx = here.id;
     on Locales[localeIdx] {
-      // const basisStates : [0 ..# size] uint(64) = sigmas;
-      // const coeffs : [0 ..# size] cs.eltType = cs;
-      // copyComplete$.writeEF(true);
-      // ref queue = globalAllQueues[here.id]; // :c_ptr(owned CommunicationQueue(eltType));
-      // if queue == nil then
-      //   halt("oops: queuePtr is null");
-      // logDebug("Calling localProcess ...");
-      // logDebug("  " + queuePtr.deref()._basisPtr:string);
-      // queue!.numRemoteCalls.add(1);
-      // queue!.localProcess(basisStates, coeffs);
-      // var timer = new Timer();
-      // timer.start();
+      var timer = new Timer();
+      timer.start();
       localProcess(remoteBasis, remoteAccessor, remoteBasisStates, remoteCoeffs, mySize);
-      // timer.stop();
-      // remoteLocalProcessTimePtr.deref() += timer.elapsed();
+      timer.stop();
+      const time = timer.elapsed();
+      PUT(c_const_ptrTo(time), mainLocaleIdx, localProcessTimePtr, c_sizeof(real));
     }
-    rTimer.stop();
-    flushBufferRemoteTime.add(rTimer.elapsed());
-    timer.start();
+    remoteTimer.stop();
 
     remoteBuffer.lock.unlock();
-    // We need to wait for the remote copy to complete before we can reuse
-    // `sigmas` and `cs`.
-    // copyComplete$.readFF();
-    // logDebug("end processOnRemote!");
     timer.stop();
-    flushBufferLocalTime.add(timer.elapsed());
+
+    flushBufferTime.add(timer.elapsed(), memoryOrder.relaxed);
+    flushBufferPutTime.add(putTimer.elapsed(), memoryOrder.relaxed);
+    flushBufferRemoteTime.add(remoteTimer.elapsed(), memoryOrder.relaxed);
+    lockWaitingTimeRemote.add(lockWaitingTimer.elapsed(), memoryOrder.relaxed);
+    localProcessTimeRemote.add(localProcessTime, memoryOrder.relaxed);
   }
 
   inline proc _enqueueUnsafe(localeIdx : int,
                              count : int,
                              basisStates : c_ptr(uint(64)),
-                             coeffs : c_ptr(coeffType),
+                             coeffs : c_ptr(?t),
                              release : bool) {
     var timer = new Timer();
     timer.start();
 
     ref offset = _sizes[localeIdx];
     assert(offset + count <= _dom.size);
-    c_memcpy(c_ptrTo(_basisStates[localeIdx][offset]), basisStates, count:c_size_t * c_sizeof(uint(64)));
-    c_memcpy(c_ptrTo(_coeffs[localeIdx][offset]), coeffs, count:c_size_t * c_sizeof(coeffType));
+    c_memcpy(c_ptrTo(_basisStates[localeIdx][offset]), basisStates,
+             count:c_size_t * c_sizeof(uint(64)));
+    // c_memcpy(c_ptrTo(_coeffs[localeIdx][offset]), coeffs, count:c_size_t * c_sizeof(coeffType));
+    const dst = c_ptrTo(_coeffs[localeIdx][offset]);
+    foreach i in 0 ..# count do
+      dst[i] = coeffs[i]:coeffType;
     offset += count;
     // So far, everything was done locally. Only `_flushBuffer` involves
     // communication.
@@ -212,7 +215,7 @@ class CommunicationQueue {
   proc enqueue(localeIdx : int,
                in count : int,
                in basisStates : c_ptr(uint(64)),
-               in coeffs : c_ptr(coeffType)) {
+               in coeffs : c_ptr(?t)) {
     var timer = new Timer();
     timer.start();
 
@@ -221,15 +224,18 @@ class CommunicationQueue {
       t2.start();
       localProcess(_bases[localeIdx], _accessors[localeIdx], basisStates, coeffs, count);
       t2.stop();
-      localProcessTime.add(t2.elapsed());
+      localProcessTimeHere.add(t2.elapsed());
 
       timer.stop();
       enqueueTime.add(timer.elapsed());
       return;
     }
 
+    var lockWaitingTimer = new Timer();
     while count > 0 {
+      lockWaitingTimer.start();
       _lock(localeIdx);
+      lockWaitingTimer.stop();
       const remaining = min(_dom.size - _sizes[localeIdx], count);
       _enqueueUnsafe(localeIdx, remaining, basisStates, coeffs, release=true);
       // _unlock(localeIdx);
@@ -238,18 +244,22 @@ class CommunicationQueue {
       coeffs += remaining;
     }
     timer.stop();
-    enqueueTime.add(timer.elapsed());
+    enqueueTime.add(timer.elapsed(), memoryOrder.relaxed);
+    lockWaitingTimeHere.add(lockWaitingTimer.elapsed(), memoryOrder.relaxed);
   }
 
   proc drain() {
+    var lockWaitingTimer = new Timer();
     for localeIdx in LocaleSpace {
+      lockWaitingTimer.start();
       _lock(localeIdx);
+      lockWaitingTimer.stop();
       _flushBuffer(localeIdx, release=true);
-      // _unlock(localeIdx);
     }
     // Check
     foreach localeIdx in LocaleSpace do
       assert(_sizes[localeIdx] == 0);
+    lockWaitingTimeHere.add(lockWaitingTimer.elapsed(), memoryOrder.relaxed);
   }
 }
 
@@ -261,8 +271,7 @@ record RemoteBuffer {
   var coeffs : c_ptr(coeffType);
   var lock : chpl_LocalSpinlock;
 
-  var localProcessTime : real;
-
+  // var localProcessTime : real;
   proc postinit() {
     const rvf_size = size;
     on Locales[localeIdx] {
@@ -299,7 +308,9 @@ record StagingBuffers {
   var _basisStates : [0 ..# numLocales, 0 ..# _capacity] uint(64);
   var _coeffs : [0 ..# numLocales, 0 ..# _capacity] coeffType;
   var _queue : c_ptr(owned CommunicationQueue(coeffType));
-  var sameCount : int;
+  var hashTime : real;
+  var enqueueTime : real;
+  var nonZeroCount : int;
   var totalCount : int;
 
   proc init(ref queue : owned CommunicationQueue(?t)) {
@@ -325,11 +336,24 @@ record StagingBuffers {
     }
   }
 
+  proc deinit() {
+    flush();
+  }
+
+  // proc deinit() {
+    // logDebug("StagingBuffers: spent ", hashTime, " in localeIdxOf (and related stuff) and ",
+    //          enqueueTime, " in enqueue; nonZeroCount / totalCount = ", nonZeroCount:real / totalCount:real);
+  // }
+
   proc flush(localeIdx : int) {
+    var timer = new Timer();
+    timer.start();
     _queue.deref().enqueue(localeIdx, _sizes[localeIdx],
                            c_const_ptrTo(_basisStates[localeIdx, 0]),
                            c_const_ptrTo(_coeffs[localeIdx, 0]));
     _sizes[localeIdx] = 0;
+    timer.stop();
+    enqueueTime += timer.elapsed();
   }
   proc flush() {
     foreach localeIdx in LocaleSpace do
@@ -348,10 +372,21 @@ record StagingBuffers {
   proc add(batchSize : int,
            basisStatesPtr : c_ptr(uint(64)),
            coeffsPtr : c_ptr(?t)) {
+    var timer = new Timer();
+
+    if numLocales == 1 {
+      // timer.start();
+      _queue.deref().enqueue(here.id, batchSize, basisStatesPtr, coeffsPtr);
+      // timer.stop();
+      // enqueueTime += timer.elapsed();
+      return;
+    }
+
     param blockSize = 128;
     const numBlocks = batchSize / blockSize;
     const numRest = batchSize % blockSize;
 
+    timer.start();
     var localeIdxs : c_array(int, blockSize);
     for i in 0 ..# numBlocks {
       foreach k in 0 ..# blockSize {
@@ -359,18 +394,27 @@ record StagingBuffers {
       }
       for k in 0 ..# blockSize {
         const c = coeffsPtr[i * blockSize + k]:coeffType;
-        if c != 0 then
+        // if c != 0 {
+          timer.stop();
           add(localeIdxs[k], basisStatesPtr[i * blockSize + k], c);
+          timer.start();
+        // }
       }
     }
     for i in blockSize * numBlocks ..< batchSize {
       const c = coeffsPtr[i]:coeffType;
-      if c != 0 {
-        const localeIdx = localeIdxOf(basisStatesPtr[i]);
-        add(localeIdx, basisStatesPtr[i], c);
-      }
+      // totalCount += 1;
+      // if c != 0 {
+        // nonZeroCount += 1;
+      const localeIdx = localeIdxOf(basisStatesPtr[i]);
+      timer.stop();
+      add(localeIdx, basisStatesPtr[i], c);
+      timer.start();
+      // }
     }
 
+    timer.stop();
+    hashTime += timer.elapsed();
     // This function could potentially be vectorized, because
     // computing hashes should make it compute bound.
     // for i in 0 ..# batchSize {

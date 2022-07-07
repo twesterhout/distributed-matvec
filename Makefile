@@ -121,7 +121,7 @@ bin/Example05: example/Example05.chpl $(MODULES)
 
 bin/dummy: src/dummy.chpl
 	@mkdir -p $(@D)
-	chpl -o $@ $<
+	chpl $(CFLAGS) -o $@ $<
 
 
 # Dummy file we use to reproduce internal compiler errors in Chapel for
