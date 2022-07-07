@@ -4,7 +4,6 @@ use RangeChunk;
 
 config const kNumSpins = 10;
 config const kVerbose = false;
-config const kRunHashedToBlock = true;
 
 proc main() {
   initRuntime();
@@ -13,7 +12,7 @@ proc main() {
   var basis0 = new Basis("{\"number_spins\": " + kNumSpins:string
                         + ", \"hamming_weight\": " + (kNumSpins / 2):string
                         + "}");
-  var r = enumerateStatesNew(basis0);
+  var r = enumerateStates(basis0);
   const ref buckets0 = r[0];
   const ref masks0 = r[1];
   // var (buckets0, masks0) = ;

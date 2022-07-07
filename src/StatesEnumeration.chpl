@@ -608,7 +608,7 @@ proc _enumStatesDistribute(const ref buckets, ref masks,
   return (distributeTimer.elapsed(), copyTimes, maskCopyTimes);
 }
 
-proc enumerateStatesNew(ranges : [] range(uint(64)), const ref basis : Basis) {
+proc enumerateStates(ranges : [] range(uint(64)), const ref basis : Basis) {
   var timer = new Timer();
   timer.start();
 
@@ -646,16 +646,16 @@ proc enumerateStatesNew(ranges : [] range(uint(64)), const ref basis : Basis) {
            "               ", maskCopyTimes, " copying masks");
   return (basisStates, masks);
 }
-proc enumerateStatesNew(globalRange : range(uint(64)), const ref basis : Basis,
+proc enumerateStates(globalRange : range(uint(64)), const ref basis : Basis,
                         numChunks : int = enumerateStatesNumChunks) {
   const isHammingWeightFixed = basis.isHammingWeightFixed();
   const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
-  return enumerateStatesNew(ranges, basis);
+  return enumerateStates(ranges, basis);
 }
-proc enumerateStatesNew(const ref basis : Basis, numChunks : int = enumerateStatesNumChunks) {
+proc enumerateStates(const ref basis : Basis, numChunks : int = enumerateStatesNumChunks) {
   const lower = basis.minStateEstimate();
   const upper = basis.maxStateEstimate();
-  return enumerateStatesNew(lower .. upper, basis, numChunks);
+  return enumerateStates(lower .. upper, basis, numChunks);
 }
 
 
@@ -666,7 +666,7 @@ export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
   logDebug("ls_chpl_enumerate_representatives ...");
   const basis = new Basis(p, owning=false);
   // var rs = localEnumerateRepresentatives(basis, lower, upper);
-  var rs = enumerateStatesNew(basis);
+  var rs = enumerateStates(basis);
   // ref v = rs[here];
   var v = rs[0][here];
   // writeln(v.type:string);
