@@ -7,8 +7,19 @@ proc localLoadVectors(filename : string, x : string = "/x", y : string = "/y") {
   return (input, output);
 }
 
-config const kHamiltonian = "data/heisenberg_chain_10.yaml";
-config const kVectors = "data/matvec/heisenberg_chain_10.h5";
+config const kSystem = "heisenberg_chain";
+config const kNumSpins = 10;
+
+proc makeFilename(system, numSpins, extension) {
+  return system + "_" + numSpins:string + "." + extension;
+}
+
+config const kHamiltonian = "data/" + makeFilename(kSystem, kNumSpins, "yaml");
+config const kVectors = if kNumSpins < 24
+                          then "data/matvec/" +
+                                  makeFilename(kSystem, kNumSpins, "h5")
+                          else "data/large-scale/matvec/" +
+                                  makeFilename(kSystem, kNumSpins, "h5");
 config const kAbsTol = 1e-14;
 config const kRelTol = 1e-12;
 config const kVerbose = false;
@@ -33,9 +44,8 @@ proc main() {
 
   // timer.clear();
   // timer.start();
-  var __t = enumerateStates(matrix.basis);
-  const ref basisStates = __t[0];
-  const ref masks = __t[1];
+  const masks;
+  const basisStates = enumerateStates(matrix.basis, masks);
   // timer.stop();
   // logDebug("Enumerating basis states took ", timer.elapsed());
 

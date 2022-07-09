@@ -450,9 +450,9 @@ proc _enumStatesComputeCounts(ref buckets,
   var counts : [0 ..# numChunks, 0 ..# numLocales] int;
   const countsPtr = c_ptrTo(counts[0, 0]);
 
-  if kVerboseComm then startVerboseComm();
-  var countsTimer = new Timer();
-  countsTimer.start();
+  // if kVerboseComm then startVerboseComm();
+  // var countsTimer = new Timer();
+  // countsTimer.start();
   const serializedBasis : string = basis.toJSON();
   coforall loc in Locales do on loc {
     const myBasis = new Basis(serializedBasis.localize());
@@ -474,13 +474,13 @@ proc _enumStatesComputeCounts(ref buckets,
       PUT(myCountsPtr, 0, destPtr, destSize);
     }
   }
-  countsTimer.stop();
-  if kVerboseComm then stopVerboseComm();
+  // countsTimer.stop();
+  // if kVerboseComm then stopVerboseComm();
 
-  return (counts, countsTimer.elapsed());
+  return counts;
 }
 
-proc _enumStatesCountsToOffsets(counts) {
+proc _enumStatesCountsToOffsets(counts, out _totalCounts) {
   const numChunks = counts.shape[0];
 
   var offsets : [0 ..# numChunks, 0 ..# numLocales] int;
@@ -494,7 +494,8 @@ proc _enumStatesCountsToOffsets(counts) {
     totalCounts[localeIdx] = total;
   }
 
-  return (offsets, totalCounts);
+  _totalCounts = totalCounts;
+  return offsets;
 }
 
 proc _enumStatesMakeMasksOffsets(counts) {
@@ -608,7 +609,7 @@ proc _enumStatesDistribute(const ref buckets, ref masks,
   return (distributeTimer.elapsed(), copyTimes, maskCopyTimes);
 }
 
-proc enumerateStates(ranges : [] range(uint(64)), const ref basis : Basis) {
+proc enumerateStates(ranges : [] range(uint(64)), const ref basis : Basis, out _masks) {
   var timer = new Timer();
   timer.start();
 
@@ -620,11 +621,15 @@ proc enumerateStates(ranges : [] range(uint(64)), const ref basis : Basis) {
 
   // How many states coming from a certain chunk live on a certain locale.
   // Each chunk computes its own row in parallel and then does a remote PUT here.
-  const (counts, countsTime) = _enumStatesComputeCounts(buckets, ranges, basis);
+  var countsTimer = new Timer();
+  countsTimer.start();
+  const counts = _enumStatesComputeCounts(buckets, ranges, basis);
+  countsTimer.stop();
 
   // Transform counts into offsets such that each task known where to copy data.
   // Total counts tell us how much memory we have to allocate on each locale.
-  const (offsets, totalCounts) = _enumStatesCountsToOffsets(counts);
+  const totalCounts;
+  const offsets = _enumStatesCountsToOffsets(counts, totalCounts);
 
   // Allocate space for states
   var basisStates = new BlockVector(uint(64), totalCounts, distribute=true);
@@ -640,22 +645,24 @@ proc enumerateStates(ranges : [] range(uint(64)), const ref basis : Basis) {
 
   timer.stop();
   logDebug("enumerateStatesNew took ", timer.elapsed(), "\n",
-           "    from which ", countsTime, " were spent computing counts\n",
-           "           and ", distributeTime, " shuffling stuff around\n",
-           "  time in PUTs ", copyTimes, "\n",
-           "               ", maskCopyTimes, " copying masks");
-  return (basisStates, masks);
+           "  ├─ ", countsTimer.elapsed(), " were spent computing counts\n",
+           "  └─ ", distributeTime, " shuffling stuff around\n",
+           "      ├─ ", copyTimes, " copying states\n",
+           "      └─ ", maskCopyTimes, " copying masks");
+  _masks = masks;
+  return basisStates;
 }
 proc enumerateStates(globalRange : range(uint(64)), const ref basis : Basis,
-                        numChunks : int = enumerateStatesNumChunks) {
+                     out masks, numChunks : int = enumerateStatesNumChunks) {
   const isHammingWeightFixed = basis.isHammingWeightFixed();
   const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
-  return enumerateStates(ranges, basis);
+  return enumerateStates(ranges, basis, masks);
 }
-proc enumerateStates(const ref basis : Basis, numChunks : int = enumerateStatesNumChunks) {
+proc enumerateStates(const ref basis : Basis, out masks,
+                     numChunks : int = enumerateStatesNumChunks) {
   const lower = basis.minStateEstimate();
   const upper = basis.maxStateEstimate();
-  return enumerateStates(lower .. upper, basis, numChunks);
+  return enumerateStates(lower .. upper, basis, masks, numChunks);
 }
 
 
@@ -666,9 +673,10 @@ export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
   logDebug("ls_chpl_enumerate_representatives ...");
   const basis = new Basis(p, owning=false);
   // var rs = localEnumerateRepresentatives(basis, lower, upper);
-  var rs = enumerateStates(basis);
+  const masks;
+  var rs = enumerateStates(basis, masks);
   // ref v = rs[here];
-  var v = rs[0][here];
+  var v = rs[here];
   // writeln(v.type:string);
   // writeln(getExternalArrayType(v):string);
   // writeln(v._value.isDefaultRectangular():string);
@@ -920,8 +928,8 @@ proc arrFromHashedToBlock(const ref arr, const ref masks,
 
   timer.stop();
   logDebug("arrFromHashedToBlock took ", timer.elapsed(), "\n",
-           "    from which ", countsTimer.elapsed(), " were spent computing counts\n",
-           "           and ", distributeTimer.elapsed(), " merging arrays");
+           "  ├─ ", countsTimer.elapsed(), " in computing counts\n",
+           "  └─ ", distributeTimer.elapsed(), " in merging arrays");
   return destArr;
 }
 
@@ -1472,10 +1480,10 @@ proc arrFromBlockToHashed(const ref arr : [] ?eltType, const ref masks : [] ?i,
 
   timer.stop();
   logDebug("arrFromBlockToHashed took ", timer.elapsed(), "\n",
-           "    from which ", countsTimer.elapsed(), " were spent computing counts\n",
-           "               ", makeDestArrTimer.elapsed(), " allocating destArr\n",
-           "               ", distributeTimer.elapsed(), " in the main loop\n",
-           "    from which ", permuteTime, " were spent in permuteBasedOnMasks");
+           "  ├─ ", countsTimer.elapsed(), " were spent computing counts\n",
+           "  ├─ ", makeDestArrTimer.elapsed(), " allocating destArr\n",
+           "  └─ ", distributeTimer.elapsed(), " in the main loop\n",
+           "      └─ ", permuteTime, " in permuteBasedOnMasks");
   // if kVerboseComm then stopVerboseComm();
   return destArr;
 }

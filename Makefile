@@ -24,10 +24,11 @@ MODULES = src/LatticeSymmetries.chpl \
 	  src/CommunicationQueue.chpl \
 	  src/DistributedMatrixVector.chpl \
 	  src/MultiwayMerge.chpl \
+	  src/Vector.chpl \
 	  src/helper.c
 
 .PHONY: all
-all: test examples
+all: examples
 
 ifeq ($(UNAME), Linux)
   CHPL_LIBS = LD_LIBRARY_PATH=$(PWD)/third_party/lib:$$LD_LIBRARY_PATH
@@ -38,7 +39,8 @@ endif
 CHPL_ARGS =
 
 .PHONY: examples
-examples: bin/Example01 bin/Example02 bin/Example03 bin/Example04 bin/Example05
+examples: bin/Example02 bin/Example05
+# examples: bin/Example01 bin/Example02 bin/Example03 bin/Example04 bin/Example05
 
 .PHONY: test
 test: bin/TestStatesEnumeration bin/TestMatrixVectorProduct
