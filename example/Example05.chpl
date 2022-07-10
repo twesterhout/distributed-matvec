@@ -55,8 +55,8 @@ proc main() {
   // const (xRaw, yRaw) = localLoadVectors(kVectors);
   // const x = xRaw;
   // const y = xRaw;
-  if kVerbose then
-    writeln(basisStates);
+  // if kVerbose then
+  //   writeln(basisStates);
 
   // timer.clear();
   // timer.start();
