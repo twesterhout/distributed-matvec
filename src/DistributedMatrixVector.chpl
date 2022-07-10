@@ -331,8 +331,8 @@ record _RemoteBuffer {
     waitTimer.start();
     // Wait for the buffer to become empty
     while isFull.read() {
-      if !inTheMeantime() then
-        chpl_task_yield();
+      inTheMeantime();
+      chpl_task_yield();
       // tryProcessLocal(taskIdx, newLocalBuffers, matrix, accessor);
     }
     waitTimer.stop();
