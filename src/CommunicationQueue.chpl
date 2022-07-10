@@ -26,9 +26,6 @@ inline proc PUT(addr, node, rAddr, size) {
   __primitive("chpl_comm_put", addr, node, rAddr, size);
 }
 
-// var globalLocalProcessTime : [LocaleSpace dmapped Block(LocaleSpace)]
-//                                 (atomic real, atomic real, atomic real);
-
 proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccessor(?coeffType)),
                   basisStates : c_ptr(uint(64)), coeffs : c_ptr(?t), size : int) {
   var timer = new Timer();
@@ -37,16 +34,9 @@ proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccesso
   var indexingTimer = new Timer();
   var accessTimer = new Timer();
   local {
-    // assert(basisPtr != nil);
-    // assert(accessorPtr != nil);
-
     // count == 0 has to be handled separately because c_ptrTo(indices) fails
     // when the size of indices is 0.
     if size == 0 then return (0, 0, 0, 0);
-
-    // TODO: is the fact that we're allocating `indices` over and over again
-    // okay performance-wise?
-    // logDebug("ls_hs_state_index ...");
 
     allocateTimer.start();
     var indices : [0 ..# size] int = noinit;
@@ -73,18 +63,7 @@ proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccesso
   timer.stop();
   return (timer.elapsed(), allocateTimer.elapsed(),
           indexingTimer.elapsed(), accessTimer.elapsed());
-  // ref myTimes = globalLocalProcessTime[here.id];
-  // myTimes[0].add(indexingTimer.elapsed());
-  // myTimes[1].add(allocateTimer.elapsed());
-  // myTimes[2].add(accessTimer.elapsed());
 }
-// inline proc localProcess(const ref sigmas : [] uint(64),
-//                          const ref coeffs : [] complex(128)) {
-//   // logDebug("localProcess(" + sigmas:string + ", " + coeffs:string + ") ...");
-//   assert(sigmas.size == coeffs.size);
-//   localProcess(sigmas.size, c_const_ptrTo(sigmas), c_const_ptrTo(coeffs));
-// }
-
 
 // Handles the non-trivial communication of matrix elements between locales
 class CommunicationQueue {
