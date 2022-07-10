@@ -15,6 +15,7 @@ use CommunicationQueue;
 
 config const kVerboseComm : bool = false; 
 config const kVerboseGetTiming : bool = false; 
+config const kUseQueue : bool = true;
 
 /* 
  */
@@ -93,15 +94,39 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
 
     var timer = new Timer();
     timer.start();
-    const (basisStatesPtr, coeffsPtr, offsetsPtr) = batchedOperator.computeOffDiag(
+    const (n, basisStatesPtr, coeffsPtr, keysPtr) = batchedOperator.computeOffDiag(
         r.size, c_const_ptrTo(representatives[r.low]), c_const_ptrTo(x[r.low]));
-    const n = offsetsPtr[r.size];
+    chpl_task_yield();
+    var radixOffsets : c_array(int, 257);
+    radixOneStep(n, keysPtr, radixOffsets, basisStatesPtr, coeffsPtr);
+    chpl_task_yield();
+    // const n = offsetsPtr[r.size];
     timer.stop();
     computeOffDiagTime.add(timer.elapsed(), memoryOrder.relaxed);
 
     timer.clear();
     timer.start();
-    staging.add(n, basisStatesPtr, coeffsPtr);
+    var numberToDo = numLocales;
+    var isComplete : [0 ..# numLocales] bool = false;
+    while numberToDo > 0 {
+      const prev = numberToDo;
+      for localeIdx in 0 ..# numLocales {
+        if isComplete[localeIdx] then continue;
+
+        const k = radixOffsets[localeIdx];
+        const n = radixOffsets[localeIdx + 1] - k;
+        const isDone = if n != 0 then queue.tryEnqueue(localeIdx, n, basisStatesPtr + k, coeffsPtr + k)
+                                 else true;
+        if isDone {
+          isComplete[localeIdx] = true;
+          numberToDo -= 1;
+        }
+        // else
+        //   chpl_task_yield();
+      }
+      if numberToDo == prev then chpl_task_yield();
+    }
+    // staging.add(n, basisStatesPtr, coeffsPtr);
     timer.stop();
     stagingAddTime.add(timer.elapsed(), memoryOrder.relaxed);
   }
@@ -215,6 +240,8 @@ proc radixOneStep(numKeys : int, keys : c_ptr(uint(8)), offsets : c_array(int, 2
 
 var globalPtrStoreNoQueue : [LocaleSpace] (c_ptr(Basis), c_ptr(ConcurrentAccessor(real(64))));
 
+config const remoteBufferSize = 1000000;
+
 private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                                      const ref representatives : [] uint(64),
                                      numChunks : int = min(matrixVectorOffDiagonalNumChunks,
@@ -226,132 +253,175 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
   var radixTime : atomic real;
   var remoteTime : atomic real;
   var allocateTime : atomic real;
-  var getTime : atomic real;
+  var putTime : atomic real;
+  var onTime : atomic real;
   var processTime : atomic real;
+  var processTimeHere : atomic real;
+  var barrierTime1 : real;
+  var barrierTime2 : real;
+  var totalSendSize : atomic int;
   var initTimer = new Timer();
   initTimer.start();
 
-  const chunkSize = (representatives.size + numChunks - 1) / numChunks;
+  // const chunkSize = (representatives.size + numChunks - 1) / numChunks;
   // logDebug("Local dimension=", representatives.size, ", chunkSize=", chunkSize);
   var accessor = new ConcurrentAccessor(y);
   globalPtrStoreNoQueue[here.id] = (c_const_ptrTo(matrix.basis), c_ptrTo(accessor));
   allLocalesBarrier.barrier();
 
+  // const remoteBufferSize = 1000000;
+  const numTasks = here.maxTaskPar;
+  const numChunks = max(numTasks * representatives.size * matrix.numberOffDiagTerms()
+                          / remoteBufferSize,
+                        1);
+  const ranges : [0 ..# numChunks] range(int) = chunks(0 ..# representatives.size, numChunks);
   const ptrStore : [0 ..# numLocales] (c_ptr(Basis), c_ptr(ConcurrentAccessor(real(64)))) =
     globalPtrStoreNoQueue;
+
+  var localBasisStatesBuffers : [0 ..# numLocales, 0 ..# remoteBufferSize] uint(64);
+  var localCoeffsBuffers : [0 ..# numLocales, 0 ..# remoteBufferSize] complex(128);
+  var remoteBuffers : [0 ..# numLocales] RemoteBuffer(complex(128)) =
+    [i in 0 ..# numLocales] new RemoteBuffer(complex(128), remoteBufferSize, i);
+
+  const _chunkSize = (representatives.size + (numChunks - 1)) / numChunks;
+  var batchedOperators : [0 ..# numTasks] BatchedOperator =
+    [i in 0 ..# numTasks] new BatchedOperator(matrix, _chunkSize);
+  var radixOffsets : [0 ..# numTasks] c_array(int, 257);
+  var taskPtrs : [0 ..# numTasks] (c_ptr(uint(64)), c_ptr(complex(128)));
+  var totalCounts : [0 ..# numLocales] int;
+
   // var queue = new CommunicationQueue(eltType, globalPtrStore);
 
-  const ranges : [0 ..# numChunks] range(int) = chunks(0 ..# representatives.size, numChunks);
+  // const ranges : [0 ..# numChunks] range(int) = chunks(0 ..# representatives.size, numChunks);
   initTimer.stop();
   initTime += initTimer.elapsed();
-  forall rangeIdx in dynamic(0 ..# numChunks, chunkSize=1,
-                             numTasks=0) // matrixVectorMainLoopNumTasks)
-      with (var batchedOperator = new BatchedOperator(matrix, chunkSize)) {
-    const r : range(int) = ranges[rangeIdx];
 
-    var timer = new Timer();
-    timer.start();
-    const (count, basisStatesPtr, coeffsPtr, keysPtr) = batchedOperator.computeOffDiag(
-        r.size, c_const_ptrTo(representatives[r.low]), c_const_ptrTo(x[r.low]));
-    // for i in 0 ..# count {
-    //   logDebug(rangeIdx, ": ", i, ": ", basisStatesPtr[i], ", ", coeffsPtr[i]);
-    // }
-    // const n = offsetsPtr[r.size];
-    timer.stop();
-    computeOffDiagTime.add(timer.elapsed(), memoryOrder.relaxed);
-    for i in 0 ..# numLocales {
-      chpl_task_yield();
+  const numIters = (numChunks + numTasks - 1) / numTasks;
+  logDebug("numIters = ", numIters);
+  for i in 0 ..# numIters {
+    const firstChunkIdx = i * numTasks;
+    const lastChunkIdx = min(firstChunkIdx + numTasks, numChunks) - 1;
+
+    var computeTimer = new Timer();
+    computeTimer.start();
+    coforall chunkIdx in firstChunkIdx .. lastChunkIdx {
+      const r = ranges[chunkIdx];
+      const taskIdx = chunkIdx - firstChunkIdx;
+      ref batchedOperator = batchedOperators[taskIdx];
+      const (count, basisStatesPtr, coeffsPtr, keysPtr) = batchedOperator.computeOffDiag(
+          r.size, c_const_ptrTo(representatives[r.low]), c_const_ptrTo(x[r.low]));
+      radixOneStep(count, keysPtr, radixOffsets[taskIdx], basisStatesPtr, coeffsPtr);
+      taskPtrs[taskIdx] = (basisStatesPtr, coeffsPtr);
     }
+    computeTimer.stop();
+    computeOffDiagTime.add(computeTimer.elapsed());
 
-    timer.clear();
-    timer.start();
-    var offsets : c_array(int, 257);
-    radixOneStep(count, keysPtr, offsets, basisStatesPtr, coeffsPtr);
-    timer.stop();
-    radixTime.add(timer.elapsed(), memoryOrder.relaxed);
-    for i in 0 ..# numLocales {
-      chpl_task_yield();
-    }
+    var remoteTimer = new Timer();
+    remoteTimer.start();
+    coforall loc in Locales {
+      if loc == here {
+        var myTimer = new Timer();
+        myTimer.start();
+        const (basisPtr, remoteAccessorPtr) = ptrStore[loc.id];
+        for chunkIdx in firstChunkIdx .. lastChunkIdx {
+          const taskIdx = chunkIdx - firstChunkIdx;
+          const k = radixOffsets[taskIdx][loc.id];
+          const n = radixOffsets[taskIdx][loc.id + 1] - k;
+          const (basisStatesPtr, coeffsPtr) = taskPtrs[taskIdx];
 
-    for localeIdx in 0 ..# numLocales {
-      const myCount = offsets[localeIdx + 1] - offsets[localeIdx];
-      if myCount != 0 {
-        const mainBasisStatesPtr = basisStatesPtr + offsets[localeIdx];
-        const mainCoeffsPtr = coeffsPtr + offsets[localeIdx];
-        const mainLocaleIdx = here.id;
-        const (myBasisPtr, myAccessorPtr) = ptrStore[localeIdx];
-        var mainTimers : c_array(real, 3);
-        const mainTimersPtr = mainTimers:c_ptr(real);
-        if localeIdx == mainLocaleIdx {
-          localProcess(myBasisPtr, myAccessorPtr,
-                       mainBasisStatesPtr,
-                       mainCoeffsPtr,
-                       myCount);
+          localProcess(basisPtr, remoteAccessorPtr, basisStatesPtr + k,
+                       coeffsPtr + k, n);
           chpl_task_yield();
         }
-        else {
-          if kVerboseComm then startVerboseCommHere();
-          timer.clear();
-          timer.start();
-          on Locales[localeIdx] {
-            var myAllocateTimer = new Timer();
-            var myGetTimer = new Timer();
-            var myProcessTimer = new Timer();
-            // const (myBasisPtr, myAccessorPtr) = globalPtrStoreNoQueue[localeIdx];
-            myAllocateTimer.start();
-            var myBasisStates : [0 ..# myCount] uint(64);
-            var myCoeffs : [0 ..# myCount] complex(128);
-            myAllocateTimer.stop();
-
-            myGetTimer.start();
-            GET(c_ptrTo(myBasisStates[0]), mainLocaleIdx, mainBasisStatesPtr,
-                myCount:c_size_t * c_sizeof(uint(64)));
-            myGetTimer.stop();
-            if kVerboseGetTiming then logDebug("GET from locale ", mainLocaleIdx, " of ", myCount:c_size_t * c_sizeof(uint(64)),
-                                               " bytes took ", myGetTimer.elapsed(), ", i.e. ",
-                                               (myCount:c_size_t * c_sizeof(uint(64))):real / myGetTimer.elapsed()
-                                                 / 1024.0 / 1024.0 / 1024.0, " GB/s");
-            myGetTimer.start();
-            GET(c_ptrTo(myCoeffs[0]), mainLocaleIdx, mainCoeffsPtr,
-                myCount:c_size_t * c_sizeof(myCoeffs.eltType));
-            myGetTimer.stop();
-            // logDebug("myBasisStates=", myBasisStates);
-            // logDebug("myBasisStates=", myCoeffs);
-            myProcessTimer.start();
-            localProcess(myBasisPtr, myAccessorPtr,
-                         c_ptrTo(myBasisStates[0]),
-                         c_ptrTo(myCoeffs[0]),
-                         myCount);
-            myProcessTimer.stop();
-
-            var myTimers : c_array(real, 3);
-            myTimers[0] = myAllocateTimer.elapsed();
-            myTimers[1] = myGetTimer.elapsed();
-            myTimers[2] = myProcessTimer.elapsed();
-            PUT(myTimers:c_ptr(real), mainLocaleIdx, mainTimersPtr,
-                myTimers.size:c_size_t * c_sizeof(real));
-          }
-          timer.stop();
-          remoteTime.add(timer.elapsed(), memoryOrder.relaxed);
-          allocateTime.add(mainTimers[0], memoryOrder.relaxed);
-          getTime.add(mainTimers[1], memoryOrder.relaxed);
-          processTime.add(mainTimers[2], memoryOrder.relaxed);
-          if kVerboseComm then stopVerboseCommHere();
-        }
+        myTimer.stop();
+        processTimeHere.add(myTimer.elapsed());
       }
-    }
-    // timer.clear();
-    // timer.start();
-    // staging.add(n, basisStatesPtr, coeffsPtr);
-    // timer.stop();
-    // stagingAddTime.add(timer.elapsed(), memoryOrder.relaxed);
-  }
+      else {
+        var total = 0;
+        for chunkIdx in firstChunkIdx .. lastChunkIdx {
+          const taskIdx = chunkIdx - firstChunkIdx;
+          const k = radixOffsets[taskIdx][loc.id];
+          const n = radixOffsets[taskIdx][loc.id + 1] - k;
+          assert(total + n <= remoteBufferSize);
+          const (basisStatesPtr, coeffsPtr) = taskPtrs[taskIdx];
+          c_memcpy(c_ptrTo(localBasisStatesBuffers[loc.id, total]),
+                   basisStatesPtr + k, n:c_size_t * c_sizeof(uint(64)));
+          c_memcpy(c_ptrTo(localCoeffsBuffers[loc.id, total]),
+                   coeffsPtr + k, n:c_size_t * c_sizeof(complex(128)));
+          total += n;
+        }
+        totalCounts[loc.id] = total;
+        // chpl_task_yield();
+        // logDebug("Sending ", localBasisStatesBuffers[loc.id, 0 ..# total], " to ", loc);
 
-  // var queueTimer = new Timer();
-  // queueTimer.start();
-  // queue.drain();
-  // queueTimer.stop();
-  // queueDrainTime += queueTimer.elapsed();
+        var putTimer = new Timer();
+        putTimer.start();
+        remoteBuffers[loc.id].put(
+          c_ptrTo(localBasisStatesBuffers[loc.id, 0]),
+          c_ptrTo(localCoeffsBuffers[loc.id, 0]),
+          total);
+        putTimer.stop();
+        putTime.add(putTimer.elapsed());
+        totalSendSize.add(total);
+        // chpl_task_yield();
+      }
+        // const (remoteBasis, remoteAccessor) = ptrStore[loc.id];
+        // const remoteBasisStates = remoteBuffers[loc.id].basisStates;
+        // const remoteCoeffs = remoteBuffers[loc.id].coeffs;
+        // const remoteSize = total;
+        // var onTimer = new Timer();
+        // var _processTime : real;
+        // var _processTimePtr = c_ptrTo(_processTime);
+        // const mainLocaleIdx = here.id;
+        // onTimer.start();
+        // on loc {
+        //   var myTimer = new Timer();
+        //   myTimer.start();
+        //   localProcess(remoteBasis, remoteAccessor, remoteBasisStates,
+        //                remoteCoeffs, remoteSize);
+        //   myTimer.stop();
+        //   var myTime = myTimer.elapsed();
+        //   PUT(c_ptrTo(myTime), mainLocaleIdx, _processTimePtr, c_sizeof(real));
+        // }
+        // onTimer.stop();
+        // onTime.add(onTimer.elapsed());
+        // processTime.add(_processTime);
+    }
+    var barrierTimer1 = new Timer();
+    barrierTimer1.start();
+    allLocalesBarrier.barrier();
+    barrierTimer1.stop();
+    coforall loc in Locales {
+      const (remoteBasis, remoteAccessor) = ptrStore[loc.id];
+      const remoteBasisStates = remoteBuffers[loc.id].basisStates;
+      const remoteCoeffs = remoteBuffers[loc.id].coeffs;
+      const remoteSize = totalCounts[loc.id];
+      var onTimer = new Timer();
+      var _processTime : real;
+      var _processTimePtr = c_ptrTo(_processTime);
+      const mainLocaleIdx = here.id;
+      onTimer.start();
+      on loc {
+        var myTimer = new Timer();
+        myTimer.start();
+        localProcess(remoteBasis, remoteAccessor, remoteBasisStates,
+                     remoteCoeffs, remoteSize);
+        myTimer.stop();
+        var myTime = myTimer.elapsed();
+        PUT(c_ptrTo(myTime), mainLocaleIdx, _processTimePtr, c_sizeof(real));
+      }
+      onTimer.stop();
+      onTime.add(onTimer.elapsed());
+      processTime.add(_processTime);
+    }
+    var barrierTimer2 = new Timer();
+    barrierTimer2.start();
+    allLocalesBarrier.barrier();
+    barrierTimer2.stop();
+
+    remoteTimer.stop();
+    remoteTime.add(remoteTimer.elapsed());
+  }
 
   allLocalesBarrier.barrier();
   timer.stop();
@@ -359,10 +429,12 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
            "  ├─ ", initTime, " in initialization\n",
            "  ├─ ", computeOffDiagTime, " in computeOffDiag (total)\n",
            "  ├─ ", radixTime, " in radixOneStep (total)\n",
-           "  └─ ", remoteTime, " in remote on clauses (total)\n",
-           "      ├─ ", allocateTime, " in allocations\n",
-           "      ├─ ", getTime, " in remote GETs\n",
-           "      └─ ", processTime, " in localProcess");
+           "  └─ ", remoteTime, " in remote stuff\n",
+           "      ├─ ", processTimeHere, " in localProcess on here\n",
+           "      ├─ ", putTime, " in remote PUTs\n",
+           "      └─ ", onTime, " in remote on clauses\n",
+           "          └─ ", processTime, " in localProcess on remote\n",
+           " totalSendSize=", totalSendSize);
 }
 
 private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
@@ -372,8 +444,10 @@ private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref
   assert(y.locale == here);
   assert(representatives.locale == here);
   localDiagonal(matrix, x, y, representatives);
-  // localOffDiagonal(matrix, x, y, representatives);
-  localOffDiagonalNoQueue(matrix, x, y, representatives);
+  if kUseQueue then
+    localOffDiagonal(matrix, x, y, representatives);
+  else
+    localOffDiagonalNoQueue(matrix, x, y, representatives);
 }
 
 proc matrixVectorProduct(matrixFilename : string,

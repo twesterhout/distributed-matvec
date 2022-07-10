@@ -124,6 +124,10 @@ class CommunicationQueue {
 
   inline proc _lock(localeIdx : int) { _locks[localeIdx].lock(); }
   inline proc _unlock(localeIdx : int) { _locks[localeIdx].unlock(); }
+  inline proc _tryLock(localeIdx : int) {
+    ref l = _locks[localeIdx].l;
+    return !(l.read() || l.testAndSet(memoryOrder.acquire));
+  }
   // inline proc _lock(localeIdx : int) { _locks[localeIdx].writeEF(true); }
   // inline proc _unlock(localeIdx : int) { _locks[localeIdx].readFE(); }
 
@@ -248,6 +252,51 @@ class CommunicationQueue {
     lockWaitingTimeHere.add(lockWaitingTimer.elapsed(), memoryOrder.relaxed);
   }
 
+  proc tryEnqueue(localeIdx : int,
+                  in count : int,
+                  in basisStates : c_ptr(uint(64)),
+                  in coeffs : c_ptr(?t)) {
+    var timer = new Timer();
+    timer.start();
+
+    if localeIdx == here.id {
+      var t2 = new Timer();
+      t2.start();
+      localProcess(_bases[localeIdx], _accessors[localeIdx], basisStates, coeffs, count);
+      t2.stop();
+      localProcessTimeHere.add(t2.elapsed());
+
+      timer.stop();
+      enqueueTime.add(timer.elapsed());
+      return true;
+    }
+
+    // var lockWaitingTimer = new Timer();
+    if _tryLock(localeIdx) {
+      while count > 0 {
+        // lockWaitingTimer.start();
+        // _lock(localeIdx);
+        // lockWaitingTimer.stop();
+        const remaining = min(_dom.size - _sizes[localeIdx], count);
+        _enqueueUnsafe(localeIdx, remaining, basisStates, coeffs, release=false);
+        // _unlock(localeIdx);
+        count -= remaining;
+        basisStates += remaining;
+        coeffs += remaining;
+      }
+      _unlock(localeIdx);
+      timer.stop();
+      enqueueTime.add(timer.elapsed(), memoryOrder.relaxed);
+      return true;
+    }
+    else {
+      timer.stop();
+      enqueueTime.add(timer.elapsed(), memoryOrder.relaxed);
+      return false;
+    }
+    // lockWaitingTimeHere.add(lockWaitingTimer.elapsed(), memoryOrder.relaxed);
+  }
+
   proc drain() {
     var lockWaitingTimer = new Timer();
     for localeIdx in LocaleSpace {
@@ -280,12 +329,18 @@ record RemoteBuffer {
     }
   }
 
-  proc put(localBasisStates : [] uint(64),
-           localCoeffs : [] coeffType,
+  proc put(localBasisStates : c_ptr(uint(64)),
+           localCoeffs : c_ptr(coeffType),
            size : int) {
     assert(size <= this.size);
-    PUT(c_ptrTo(localBasisStates[0]), localeIdx, basisStates, size:c_size_t * c_sizeof(uint(64)));
-    PUT(c_ptrTo(localCoeffs[0]), localeIdx, coeffs, size:c_size_t * c_sizeof(coeffType));
+    PUT(localBasisStates, localeIdx, basisStates, size:c_size_t * c_sizeof(uint(64)));
+    PUT(localCoeffs, localeIdx, coeffs, size:c_size_t * c_sizeof(coeffType));
+  }
+
+  inline proc put(localBasisStates : [] uint(64),
+                  localCoeffs : [] coeffType,
+                  size : int) {
+    put(c_ptrTo(localBasisStates[0]), c_ptrTo(localCoeffs[0]), size);
   }
 
   proc deinit() {
