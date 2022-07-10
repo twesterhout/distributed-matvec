@@ -289,6 +289,10 @@ record _RemoteBuffer {
   var isEmpty : c_ptr(chpl__processorAtomicType(bool));
   var isEOF : c_ptr(chpl__processorAtomicType(bool));
 
+  var _putTime : real;
+  var _waitTime : real;
+  var _submitTime : real;
+
   proc postinit() {
     isFull.write(false);
   }
@@ -296,12 +300,18 @@ record _RemoteBuffer {
   proc put(localBasisStates : c_ptr(uint(64)),
            localCoeffs : c_ptr(coeffType),
            count : int) {
+    var timer = new Timer();
+    timer.start();
+
     assert(here.id == srcLocaleIdx);
     assert(count <= capacity);
     assert(!isFull.read());
     PUT(localBasisStates, destLocaleIdx, basisStates, count:c_size_t * c_sizeof(uint(64)));
     PUT(localCoeffs, destLocaleIdx, coeffs, count:c_size_t * c_sizeof(coeffType));
-    PUT(c_const_ptrTo(count), destLocaleIdx, size, c_sizeof(int));
+    // PUT(c_const_ptrTo(count), destLocaleIdx, size, c_sizeof(int));
+
+    timer.stop();
+    _putTime += timer.elapsed();
   }
 
   inline proc put(localBasisStates : [] uint(64),
@@ -310,14 +320,46 @@ record _RemoteBuffer {
     put(c_const_ptrTo(localBasisStates[0]), c_const_ptrTo(localCoeffs[0]), size);
   }
 
+  proc submit(basisStatesPtr : c_ptr(uint(64)),
+              coeffsPtr : c_ptr(coeffType),
+              count : int,
+              inTheMeantime) {
+    var timer = new Timer();
+    timer.start();
+
+    var waitTimer = new Timer();
+    waitTimer.start();
+    // Wait for the buffer to become empty
+    while isFull.read() {
+      if !inTheMeantime() then
+        chpl_task_yield();
+      // tryProcessLocal(taskIdx, newLocalBuffers, matrix, accessor);
+    }
+    waitTimer.stop();
+    _waitTime += waitTimer.elapsed();
+
+    put(basisStatesPtr, coeffsPtr, count);
+    isFull.write(true);
+    const atomicPtr = isEmpty;
+    const sizePtr = size;
+    on Locales[destLocaleIdx] {
+      sizePtr.deref() = count;
+      atomicStoreBool(atomicPtr, false);
+    }
+
+    timer.stop();
+    _submitTime += timer.elapsed();
+  }
+
   proc finish() {
     // startVerboseCommHere();
     const atomicPtr = isEOF;
     on Locales[destLocaleIdx] {
-      pragma "local fn" pragma "fast-on safe extern function"
-      extern proc atomic_store_bool(ref obj : chpl__processorAtomicType(bool), value : bool) : void;
+      atomicStoreBool(atomicPtr, true);
+      // pragma "local fn" pragma "fast-on safe extern function"
+      // extern proc atomic_store_bool(ref obj : chpl__processorAtomicType(bool), value : bool) : void;
 
-      atomic_store_bool(atomicPtr.deref(), true);
+      // atomic_store_bool(atomicPtr.deref(), true);
       // isEOF.deref().write(true);
     }
     // stopVerboseCommHere();
@@ -336,14 +378,23 @@ var globalPtrStoreNoQueue : [LocaleSpace] (c_ptr(Basis), c_ptr(ConcurrentAccesso
 config const remoteBufferSize = 100000;
 config const numTasks = 3;
 config const kVerbose = false;
+config const specialCase = false;
 
 extern proc chpl_task_getId(): chpl_taskID_t;
+
+inline proc atomicStoreBool(p : c_ptr(chpl__processorAtomicType(bool)), value : bool) {
+  pragma "local fn" pragma "fast-on safe extern function"
+  extern proc atomic_store_bool(ref _obj : chpl__processorAtomicType(bool),
+                                _value : bool) : void;
+
+  atomic_store_bool(p.deref(), value);
+}
 
 proc tryProcessLocal(taskIdx : int, srcLocaleIdx : int, newLocalBuffers, matrix, accessor) {
   ref localBuffer = newLocalBuffers[srcLocaleIdx, taskIdx];
   if !localBuffer.isEmpty.read() {
-    if kVerbose then
-      logDebug("335: Calling localProcess for newLocalBuffers[", srcLocaleIdx, ", ", taskIdx, "]...");
+    // if kVerbose then
+    //   logDebug("335: Calling localProcess for newLocalBuffers[", srcLocaleIdx, ", ", taskIdx, "]...");
     localProcess(c_const_ptrTo(matrix.basis), c_const_ptrTo(accessor),
                  localBuffer.basisStates,
                  localBuffer.coeffs,
@@ -351,20 +402,72 @@ proc tryProcessLocal(taskIdx : int, srcLocaleIdx : int, newLocalBuffers, matrix,
     localBuffer.isEmpty.write(true);
     const atomicPtr = localBuffer.isFull;
     on Locales[localBuffer.srcLocaleIdx] {
-      pragma "local fn" pragma "fast-on safe extern function"
-      extern proc atomic_store_bool(ref obj : chpl__processorAtomicType(bool), value : bool) : void;
-
-      atomic_store_bool(atomicPtr.deref(), false);
-      // logDebug("in on clause: localBuffer.isFull.deref().write(false)");
-      // localBuffer.isFull.deref().write(false);
+      atomicStoreBool(atomicPtr, false);
     }
-    if kVerbose then
-      logDebug("335: done with localProcess for newLocalBuffers[", srcLocaleIdx, ", ", taskIdx, "]");
+    // if kVerbose then
+    //   logDebug("335: done with localProcess for newLocalBuffers[", srcLocaleIdx, ", ", taskIdx, "]");
+    return true;
   }
+  return false;
 }
 proc tryProcessLocal(taskIdx : int, newLocalBuffers, matrix, accessor) {
+  var hasDoneWork : bool = false;
   for srcLocaleIdx in 0 ..# numLocales {
-    tryProcessLocal(taskIdx, srcLocaleIdx, newLocalBuffers, matrix, accessor);
+    hasDoneWork = hasDoneWork ||
+      tryProcessLocal(taskIdx, srcLocaleIdx, newLocalBuffers, matrix, accessor);
+  }
+  return hasDoneWork;
+}
+
+record LocalOffDiagonalTimers {
+  var total : Timer;
+  var initialization : Timer;
+  var computeOffDiag : atomic real;
+  var submit : real;
+  var wait : real;
+  var put : real;
+}
+
+proc _offDiagMakeLocalBuffers(numTasks : int, remoteBufferSize : int) {
+  var localBuffers : [0 ..# numLocales, 0 ..# numTasks] _LocalBuffer(complex(128))
+    = [(srcLocaleIdx, taskIdx) in {0 ..# numLocales, 0 ..# numTasks}]
+        new _LocalBuffer(complex(128), here.id, srcLocaleIdx, remoteBufferSize);
+  return localBuffers;
+}
+
+proc _offDiagMakeRemoteBuffers(numTasks : int, remoteBufferSize : int) {
+  var remoteBuffers : [0 ..# numLocales, 0 ..# numTasks] _RemoteBuffer(complex(128))
+    = [(destLocaleIdx, taskIdx) in {0 ..# numLocales, 0 ..# numTasks}]
+        new _RemoteBuffer(complex(128), destLocaleIdx, here.id, remoteBufferSize);
+  return remoteBuffers;
+}
+
+proc _offDiagInitLocalBuffers(ref localBuffers, const ref ptrStore) {
+  const destLocaleIdx = localBuffers.locale.id;
+  coforall loc in Locales do on loc {
+    const srcLocaleIdx = loc.id;
+    const (_basis, _accessor, _remoteBufferPtr, _localBufferPtr) = ptrStore[srcLocaleIdx];
+    for taskIdx in 0 ..# numTasks {
+      ref remoteBuffer = (_remoteBufferPtr + destLocaleIdx * numTasks + taskIdx).deref();
+      localBuffers[srcLocaleIdx, taskIdx].isFull = c_ptrTo(remoteBuffer.isFull);
+    }
+  }
+}
+
+proc _offDiagInitRemoteBuffers(ref remoteBuffers, const ref ptrStore) {
+  const srcLocaleIdx = remoteBuffers.locale.id;
+  coforall loc in Locales do on loc {
+    const destLocaleIdx = loc.id;
+    const (_basis, _accessor, _remoteBufferPtr, _localBufferPtr) = ptrStore[destLocaleIdx];
+    for taskIdx in 0 ..# numTasks {
+      ref myLocalBuffer = (_localBufferPtr + srcLocaleIdx * numTasks + taskIdx).deref();
+      ref remoteBuffer = remoteBuffers[destLocaleIdx, taskIdx];
+      remoteBuffer.basisStates = myLocalBuffer.basisStates;
+      remoteBuffer.coeffs = myLocalBuffer.coeffs;
+      remoteBuffer.size = c_ptrTo(myLocalBuffer.size);
+      remoteBuffer.isEmpty = c_ptrTo(myLocalBuffer.isEmpty);
+      remoteBuffer.isEOF = c_ptrTo(myLocalBuffer.isEOF);
+    }
   }
 }
 
@@ -372,220 +475,100 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
                                      const ref representatives : [] uint(64),
                                      numChunks : int = min(matrixVectorOffDiagonalNumChunks,
                                                            representatives.size)) {
-  var timer = new Timer();
-  timer.start();
-  var initTime : real;
-  var computeOffDiagTime : atomic real;
-  var radixTime : atomic real;
-  var remoteTime : atomic real;
-  var allocateTime : atomic real;
-  var putTime : atomic real;
-  var onTime : atomic real;
-  var tryProcessLocalTime : atomic real;
-  var processTime : atomic real;
-  var processTimeHere : atomic real;
-  var barrierTime1 : real;
-  var barrierTime2 : real;
-  var totalSendSize : atomic int;
-  var initTimer = new Timer();
-  initTimer.start();
+  var timers = new LocalOffDiagonalTimers();
+  timers.total.start();
+  timers.initialization.start();
 
-  // const numTasks = 3; // here.maxTaskPar;
-  var newLocalBuffers : [0 ..# numLocales, 0 ..# numTasks] _LocalBuffer(complex(128))
-    = [(srcLocaleIdx, taskIdx) in {0 ..# numLocales, 0 ..# numTasks}]
-        new _LocalBuffer(complex(128), here.id, srcLocaleIdx, remoteBufferSize);
-  var newRemoteBuffers : [0 ..# numLocales, 0 ..# numTasks] _RemoteBuffer(complex(128))
-    = [(destLocaleIdx, taskIdx) in {0 ..# numLocales, 0 ..# numTasks}]
-        new _RemoteBuffer(complex(128), destLocaleIdx, here.id, remoteBufferSize);
+  // Other locales need access to our newLocalBuffers, newRemoteBuffers, etc.
+  // so we create and store them in a common location (on locale 0) before a
+  // barrier.
+  var newLocalBuffers = _offDiagMakeLocalBuffers(numTasks, remoteBufferSize);
+  var newRemoteBuffers = _offDiagMakeRemoteBuffers(numTasks, remoteBufferSize);
   var accessor = new ConcurrentAccessor(y);
-
   globalPtrStoreNoQueue[here.id] = (c_const_ptrTo(matrix.basis), c_ptrTo(accessor),
                                     c_ptrTo(newRemoteBuffers[0, 0]),
                                     c_ptrTo(newLocalBuffers[0, 0]));
   allLocalesBarrier.barrier();
 
-  const ptrStore : [0 ..# numLocales] (c_ptr(Basis), c_ptr(ConcurrentAccessor(real(64))),
-                                       c_ptr(_RemoteBuffer(complex(128))),
-                                       c_ptr(_LocalBuffer(complex(128)))) =
-    globalPtrStoreNoQueue;
-
-  coforall loc in Locales do on loc {
-    const destLocaleIdx = newLocalBuffers.locale.id;
-    const srcLocaleIdx = loc.id;
-    const (_basis, _accessor, _remoteBufferPtr, _localBufferPtr) = ptrStore[srcLocaleIdx];
-    for taskIdx in 0 ..# numTasks {
-      ref remoteBuffer = (_remoteBufferPtr + destLocaleIdx * numTasks + taskIdx).deref();
-      newLocalBuffers[srcLocaleIdx, taskIdx].isFull = c_ptrTo(remoteBuffer.isFull);
-    }
-  }
-
-  coforall loc in Locales do on loc {
-    const destLocaleIdx = loc.id;
-    const srcLocaleIdx = newRemoteBuffers.locale.id;
-    const (_basis, _accessor, _remoteBufferPtr, _localBufferPtr) = ptrStore[destLocaleIdx];
-    for taskIdx in 0 ..# numTasks {
-      ref myLocalBuffer = (_localBufferPtr + srcLocaleIdx * numTasks + taskIdx).deref();
-      newRemoteBuffers[destLocaleIdx, taskIdx].basisStates = myLocalBuffer.basisStates;
-      newRemoteBuffers[destLocaleIdx, taskIdx].coeffs = myLocalBuffer.coeffs;
-      newRemoteBuffers[destLocaleIdx, taskIdx].size = c_ptrTo(myLocalBuffer.size);
-      newRemoteBuffers[destLocaleIdx, taskIdx].isEmpty = c_ptrTo(myLocalBuffer.isEmpty);
-      newRemoteBuffers[destLocaleIdx, taskIdx].isEOF = c_ptrTo(myLocalBuffer.isEOF);
-    }
-  }
-
-  if kVerbose then
-    logDebug("newLocalBuffers: ", newLocalBuffers);
-  if kVerbose then
-    logDebug("newRemoteBuffers: ", newRemoteBuffers);
-
+  const ptrStore : [0 ..# numLocales] globalPtrStoreNoQueue.eltType = globalPtrStoreNoQueue;
+  _offDiagInitLocalBuffers(newLocalBuffers, ptrStore);
+  _offDiagInitRemoteBuffers(newRemoteBuffers, ptrStore);
   allLocalesBarrier.barrier();
+  timers.initialization.stop();
 
-  initTimer.stop();
-  initTime = initTimer.elapsed();
-
-  var _taskToIdxDom : domain(chpl_taskID_t, parSafe=false);
-  var _taskToIdx : [_taskToIdxDom] int;
-  var _taskToIdxLock : chpl_LocalSpinlock;
-
-  const numChunks = max(representatives.size * matrix.numberOffDiagTerms()
-                          / remoteBufferSize, 1);
+  const numChunks = max(representatives.size * matrix.numberOffDiagTerms() / remoteBufferSize, 1);
   const ranges : [0 ..# numChunks] range(int) = chunks(0 ..# representatives.size, numChunks);
-  const _chunkSize = (representatives.size + numChunks - 1) / numChunks;
-  logDebug("numChunks = ", numChunks, ", chunkSize = ", _chunkSize);
+  const batchedOperatorChunkSize = (representatives.size + numChunks - 1) / numChunks;
+  var moreWork : atomic bool = true;
+  var curChunkIdx : atomic int = 0;
 
-  forall rangeIdx in dynamic(0 ..# numChunks, chunkSize=1, numTasks=numTasks)
-                     with (ref accessor,
-                           ref _taskToIdxDom,
-                           ref _taskToIdx,
-                           var batchedOperator = new BatchedOperator(matrix, _chunkSize)) {
-    const r : range(int) = ranges[rangeIdx];
+  logDebug("numChunks = ", numChunks, ", chunkSize = ", batchedOperatorChunkSize);
+  coforall taskIdx in 0 ..# numTasks with (ref timers) {
+    var batchedOperator = new BatchedOperator(matrix, batchedOperatorChunkSize);
 
-    const _taskID = chpl_task_getId();
-    const taskIdx;
-    _taskToIdxLock.lock();
-    if _taskToIdxDom.contains(_taskID) {
-      taskIdx = _taskToIdx[_taskID];
-    }
-    else {
-      const n = _taskToIdxDom.size;
-      _taskToIdxDom.add(_taskID);
-      _taskToIdx[_taskID] = n;
-      taskIdx = n;
-    }
-    _taskToIdxLock.unlock();
-
-    if kVerbose then
-      logDebug("rangeIdx=", rangeIdx, "  taskIdx=", taskIdx);
-
-    var timer = new Timer();
-    timer.start();
-    const (n, basisStatesPtr, coeffsPtr, keysPtr) = batchedOperator.computeOffDiag(
-        r.size, c_const_ptrTo(representatives[r.low]), c_const_ptrTo(x[r.low]));
-    var radixOffsets : c_array(int, 257);
-    radixOneStep(n, keysPtr, radixOffsets, basisStatesPtr, coeffsPtr);
-    timer.stop();
-    computeOffDiagTime.add(timer.elapsed(), memoryOrder.relaxed);
-
-    timer.clear();
-    timer.start();
-    if kVerbose then
-      logDebug("461: tryProcessLocal(", taskIdx, ")...");
-    tryProcessLocal(taskIdx, newLocalBuffers, matrix, accessor);
-    timer.stop();
-    tryProcessLocalTime.add(timer.elapsed());
-
-    for destLocaleIdx in 0 ..# numLocales {
-      const k = radixOffsets[destLocaleIdx];
-      const n = radixOffsets[destLocaleIdx + 1] - k;
-      // if n == 0 then continue;
-      // if destLocaleIdx == here.id {
-      //   localProcess(c_const_ptrTo(matrix.basis), c_const_ptrTo(accessor),
-      //                basisStatesPtr + k,
-      //                coeffsPtr + k,
-      //                n);
-      //   continue;
-      // }
-
-      ref remoteBuffer = newRemoteBuffers[destLocaleIdx, taskIdx];
-      if kVerbose then
-        logDebug("477: remoteBuffers[", destLocaleIdx, ", ", taskIdx, "].isFull.waitFor(false)");
-      while remoteBuffer.isFull.read() {
-        timer.clear();
-        timer.start();
-        tryProcessLocal(taskIdx, newLocalBuffers, matrix, accessor);
-        timer.stop();
-        tryProcessLocalTime.add(timer.elapsed());
-
-        chpl_task_yield();
+    while moreWork.read() {
+      record InTheMeantime {
+        inline proc this() {
+          return tryProcessLocal(taskIdx, newLocalBuffers, matrix, accessor);
+        }
       }
-      if kVerbose then
-        logDebug("477: done waiting for remoteBuffers[", destLocaleIdx, ", ", taskIdx,
-                 "], proceeding to put");
-      // waitFor(false);
+      const inTheMeantime = new InTheMeantime();
 
-      timer.clear();
+      const rangeIdx = curChunkIdx.fetchAdd(1);
+      // Multiple threads passed moreWork.read() at once.
+      // All whose fetchAdd() was after the one
+      // that grabbed the final chunk just break.
+      if rangeIdx >= numChunks then
+        break;
+      // Final rangeIdx -- signal that to everybody
+      if rangeIdx == numChunks - 1 then
+        moreWork.write(false);
+      const r : range(int) = ranges[rangeIdx];
+
+      // Compute a r.size rows of the matrix
+      var timer = new Timer();
       timer.start();
-      remoteBuffer.put(basisStatesPtr + k, coeffsPtr + k, n);
-      remoteBuffer.isFull.write(true);
-      const atomicPtr = remoteBuffer.isEmpty;
-      on Locales[remoteBuffer.destLocaleIdx] {
-        pragma "local fn" pragma "fast-on safe extern function"
-        extern proc atomic_store_bool(ref obj : chpl__processorAtomicType(bool), value : bool) : void;
-
-        atomic_store_bool(atomicPtr.deref(), false);
-      }
+      const (n, basisStatesPtr, coeffsPtr, keysPtr) = batchedOperator.computeOffDiag(
+          r.size, c_const_ptrTo(representatives[r.low]), c_const_ptrTo(x[r.low]));
+      var radixOffsets : c_array(int, 257);
+      radixOneStep(n, keysPtr, radixOffsets, basisStatesPtr, coeffsPtr);
       timer.stop();
-      putTime.add(timer.elapsed());
+      timers.computeOffDiag.add(timer.elapsed(), memoryOrder.relaxed);
+
+      for destLocaleIdx in 0 ..# numLocales {
+        const k = radixOffsets[destLocaleIdx];
+        const n = radixOffsets[destLocaleIdx + 1] - k;
+        ref remoteBuffer = newRemoteBuffers[destLocaleIdx, taskIdx];
+        // if n == 0 then continue;
+        if destLocaleIdx == here.id {
+          assert(!remoteBuffer.isFull.read());
+          localProcess(c_const_ptrTo(matrix.basis), c_const_ptrTo(accessor),
+                       basisStatesPtr + k,
+                       coeffsPtr + k,
+                       n);
+        }
+        else {
+          remoteBuffer.submit(basisStatesPtr + k, coeffsPtr + k, n, inTheMeantime);
+          inTheMeantime();
+        }
+      }
     }
 
-    if kVerbose then
-      logDebug("494: tryProcessLocal(", taskIdx, ")...");
-    timer.clear();
-    timer.start();
-    tryProcessLocal(taskIdx, newLocalBuffers, matrix, accessor);
-    timer.stop();
-    tryProcessLocalTime.add(timer.elapsed());
-  }
-
-  logDebug("Finishing ...");
-  coforall localeIdx in 0 ..# numLocales {
-    coforall taskIdx in 0 ..# numTasks {
-      // if localeIdx != here.id {
-        var t1 = new Timer();
-        ref remoteBuffer = newRemoteBuffers[localeIdx, taskIdx];
-        // remoteBuffer.isFull.waitFor(false);
-        if kVerbose then
-          logDebug("508: remoteBuffers[", localeIdx, ", ", taskIdx, "].isFull.waitFor(false)");
-        while remoteBuffer.isFull.read() {
-          t1.clear();
-          t1.start();
-          tryProcessLocal(taskIdx, localeIdx, newLocalBuffers, matrix, accessor);
-          t1.stop();
-          tryProcessLocalTime.add(t1.elapsed());
+    coforall localeIdx in 0 ..# numLocales {
+      ref remoteBuffer = newRemoteBuffers[localeIdx, taskIdx];
+      while remoteBuffer.isFull.read() {
+        if !tryProcessLocal(taskIdx, localeIdx, newLocalBuffers, matrix, accessor) then
           chpl_task_yield();
-        }
-        if kVerbose then
-          logDebug("508: done waiting for remoteBuffers[", localeIdx, ", ", taskIdx,
-                   "], proceeding to finish");
-        remoteBuffer.finish();
+      }
+      remoteBuffer.finish();
 
-        ref localBuffer = newLocalBuffers[localeIdx, taskIdx];
-        if kVerbose then
-          logDebug("518: while !localBuffer[", localeIdx, ", ", taskIdx, "].isEOF.read()");
-        while !localBuffer.isEOF.read() {
-          t1.clear();
-          t1.start();
-          tryProcessLocal(taskIdx, localeIdx, newLocalBuffers, matrix, accessor);
-          t1.stop();
-          tryProcessLocalTime.add(t1.elapsed());
+      ref localBuffer = newLocalBuffers[localeIdx, taskIdx];
+      while !localBuffer.isEOF.read() {
+        if !tryProcessLocal(taskIdx, localeIdx, newLocalBuffers, matrix, accessor) then
           chpl_task_yield();
-        }
-        if kVerbose then
-          logDebug("518: done with localBuffer[", localeIdx, ", ", taskIdx, "]");
-      // }
+      }
     }
   }
-  logDebug("Done!");
 
   allLocalesBarrier.barrier();
 
@@ -595,19 +578,23 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
       assert(newLocalBuffers[srcLocaleIdx, taskIdx].isEmpty.read());
     }
   }
-
   for srcLocaleIdx in 0 ..# numLocales {
     for taskIdx in 0 ..# numTasks {
       assert(!newRemoteBuffers[srcLocaleIdx, taskIdx].isFull.read());
     }
   }
 
-  timer.stop();
-  logDebug("localOffDiagonalNoQueue took ", timer.elapsed(), "\n",
-           "  ├─ ", initTime, " in initialization\n",
-           "  ├─ ", computeOffDiagTime, " in computeOffDiag\n",
-           "  ├─ ", tryProcessLocalTime , " in tryProcessLocal\n",
-           "  ├─ ", putTime, " in remote PUTs\n");
+  timers.put = + reduce newRemoteBuffers._putTime;
+  timers.wait = + reduce newRemoteBuffers._waitTime;
+  timers.submit = + reduce newRemoteBuffers._submitTime;
+
+  timers.total.stop();
+  logDebug("localOffDiagonalNoQueue took ", timers.total.elapsed(), "\n",
+           "  ├─ ", timers.initialization.elapsed(), " in initialization\n",
+           "  ├─ ", timers.computeOffDiag, " in computeOffDiag\n",
+           "  ├─ ", timers.submit, " in remoteBuffer.submit\n",
+           "      ├─ ", timers.wait, " in remoteBuffer.isFull.waitFor(false)\n",
+           "      └─ ", timers.put, " in remote PUTs\n");
 }
 
 private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
