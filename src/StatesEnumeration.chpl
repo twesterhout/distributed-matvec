@@ -24,7 +24,6 @@ config const statesFromHashedToBlockNumChunks = 2 * here.maxTaskPar;
 config const statesFromBlockToHashedNumChunks = 2 * numLocales * here.maxTaskPar;
 config const kUseLowLevelComm : bool = true;
 // config const numChunksPerLocale = 3;
-config const kVerboseComm : bool = false; 
 
 inline proc GET(addr, node, rAddr, size) {
   __primitive("chpl_comm_get", addr, node, rAddr, size);
@@ -405,8 +404,6 @@ proc prefixSum(arr : [] ?eltType) {
 proc permuteBasedOnMasks(arrSize : int, masks : c_ptr(?maskType), arr : c_ptr(?eltType),
                          counts : [] int, destOffsets : [] int,
                          destPtrs : [] c_ptr(eltType)) {
-  if kVerboseComm then startVerboseCommHere();
-
   var offsets : [0 ..# numLocales] int = prefixSum(counts);
   var src : [0 ..# arrSize] eltType = noinit;
   for i in 0 ..# arrSize {
@@ -429,7 +426,6 @@ proc permuteBasedOnMasks(arrSize : int, masks : c_ptr(?maskType), arr : c_ptr(?e
   }
   copyTimer.stop();
 
-  if kVerboseComm then stopVerboseCommHere();
   return copyTimer.elapsed();
 }
 
