@@ -40,7 +40,7 @@ private proc localDiagonalBatch(indices : range(int, BoundedRangeType.bounded, f
 }
 
 config const matrixVectorDiagonalNumChunks : int = 10 * here.maxTaskPar;
-config const matrixVectorOffDiagonalNumChunks : int = 150 * here.maxTaskPar;
+config const matrixVectorOffDiagonalNumChunks : int = 32 * here.maxTaskPar;
 config const matrixVectorMainLoopNumTasks : int = here.maxTaskPar;
 
 private proc localDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
@@ -375,8 +375,8 @@ var globalPtrStoreNoQueue : [LocaleSpace] (c_ptr(Basis), c_ptr(ConcurrentAccesso
                                            c_ptr(_RemoteBuffer(complex(128))),
                                            c_ptr(_LocalBuffer(complex(128))));
 
-config const remoteBufferSize = 100000;
-config const numTasks = 3;
+config const remoteBufferSize = 150000;
+config const numTasks = here.maxTaskPar;
 config const kVerbose = false;
 config const specialCase = false;
 
