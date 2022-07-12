@@ -81,11 +81,13 @@ data/construction:
 	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Fconstruction && \
 	unzip tmp.zip && rm tmp.zip
 
+.PHONY: data/matvec
 data/matvec:
 	mkdir -p data && cd data && \
 	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Fmatvec && \
 	unzip tmp.zip && rm tmp.zip
 
+.PHONY: data/large-scale
 data/large-scale:
 	mkdir -p data && cd data && \
 	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Flarge-scale && \
