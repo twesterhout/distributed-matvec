@@ -34,7 +34,7 @@ private proc localCompressMultiply(batchSize : int, numberTerms : int,
   // offsets[batchSize] = batchSize * numberTerms;
 }
 
-config const batchedOperatorNewKernel = false;
+config const batchedOperatorNewKernel = true;
 
 record BatchedOperator {
   var _matrixPtr : c_ptr(Operator);
@@ -46,6 +46,7 @@ record BatchedOperator {
   var _coeffs1 : [_dom] complex(128);
   var _coeffs2 : [_dom] complex(128);
   var _norms : [_dom] real(64);
+  var _localeIdxs : [_dom] uint(8);
   var _offsets : [0 ..# batchSize + 1] int;
   var offDiagTime : real;
   var compressTime : real;
@@ -66,15 +67,15 @@ record BatchedOperator {
     this._dom = other._dom;
   }
 
-  proc deinit() {
-    logDebug("BatchedOperator spent ", compressTime, " in localCompressMultiply and ", offDiagTime,
-             " in apply_off_diag");
-  }
+  // proc deinit() {
+    // logDebug("BatchedOperator spent ", compressTime, " in localCompressMultiply and ",
+    //          offDiagTime, " in apply_off_diag");
+  // }
 
   proc computeOffDiag(count : int,
                       alphas : c_ptr(uint(64)),
                       xs : c_ptr(?eltType))
-      : (c_ptr(uint(64)), c_ptr(complex(128)), c_ptr(int)) {
+      : (int, c_ptr(uint(64)), c_ptr(complex(128)), c_ptr(uint(8))) {
     assert(count <= batchSize);
     const ref matrix = _matrixPtr.deref();
     // Simple case when no symmetries are used
@@ -82,21 +83,22 @@ record BatchedOperator {
       const betas = c_pointer_return(_spins1[0]);
       const cs = c_pointer_return(_coeffs1[0]);
       const offsets = c_pointer_return(_offsets[0]);
+      const keys = c_pointer_return(_localeIdxs[0]);
       // We compute H|αᵢ⟩ = ∑ⱼ cᵢⱼ|βᵢⱼ⟩ for each |αᵢ⟩ where i ∈ {0 ..# count}
       // at this point j ∈ {0 ..# _numberOffDiagTerms}. Both cᵢⱼ and |βᵢⱼ⟩ are
       // conceptually 2-dimensional arrays, but we use flattened
       // representations of them.
       var timer = new Timer();
       timer.start();
-      if !batchedOperatorNewKernel {
-        ls_hs_operator_apply_off_diag_kernel(
-          matrix.payload,
-          count,
-          alphas, 1,
-          betas, 1,
-          cs);
-      }
-      else {
+      // if !batchedOperatorNewKernel {
+      //   ls_hs_operator_apply_off_diag_kernel(
+      //     matrix.payload,
+      //     count,
+      //     alphas, 1,
+      //     betas, 1,
+      //     cs);
+      // }
+      // else {
         ls_internal_operator_apply_off_diag_x1(
           matrix.payload,
           count,
@@ -115,33 +117,40 @@ record BatchedOperator {
         // }
         // writeln();
         // halt("oops");
-      }
+      // }
       timer.stop();
       offDiagTime += timer.elapsed();
+
+      const totalCount = offsets[count];
+      foreach i in 0 ..# totalCount {
+        keys[i] = localeIdxOf(betas[i]):uint(8);
+      }
+
       // Since many cᵢⱼ could be zero, we compress |βᵢⱼ⟩ and cᵢⱼ arrays by
       // throwing away all zero elements. Furthermore, we multiply each cᵢⱼ by
       // the corresponding xᵢ since we have to do it at some point anyway.
-      if !batchedOperatorNewKernel {
-        timer.clear();
-        timer.start();
-        localCompressMultiply(
-          count, _numberOffDiagTerms,
-          betas, cs, xs,
-          offsets);
-        timer.stop();
-        compressTime += timer.elapsed();
-        // for i in 0 ..# count {
-        //   write(i, " ");
-        //   for j in offsets[i] .. offsets[i + 1] - 1 {
-        //     write(" ", (betas[j], cs[j]));
-        //   }
-        //   writeln();
-        // }
-        // halt("oops");
-      }
+      // if !batchedOperatorNewKernel {
+      //   timer.clear();
+      //   timer.start();
+      //   localCompressMultiply(
+      //     count, _numberOffDiagTerms,
+      //     betas, cs, xs,
+      //     offsets);
+      //   timer.stop();
+      //   compressTime += timer.elapsed();
+      //   // for i in 0 ..# count {
+      //   //   write(i, " ");
+      //   //   for j in offsets[i] .. offsets[i + 1] - 1 {
+      //   //     write(" ", (betas[j], cs[j]));
+      //   //   }
+      //   //   writeln();
+      //   // }
+      //   // halt("oops");
+      // }
       // assert(totalCount == offsets[count]);
-      return (betas, cs, offsets);
+      return (totalCount, betas, cs, keys);
     }
+    assert(false);
     // The tricky case when we have to project betas first
     const tempSpins = c_pointer_return(_spins2[0]);
     const tempCoeffs = c_pointer_return(_coeffs2[0]);
@@ -176,7 +185,7 @@ record BatchedOperator {
         cs[k] *= tempCoeffs[k] * norms[k] / norms[totalSize + i];
       }
     }
-    return (betas, cs, offsets);
+    return (0, nil, nil, nil); // betas, cs, offsets);
   }
 
 }
