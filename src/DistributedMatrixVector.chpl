@@ -174,6 +174,25 @@ proc matrixVectorProduct(matrixFilename : string,
   }
 }
 
+export proc ls_chpl_matrix_vector_product(matrixPtr : c_ptr(ls_hs_operator), numVectors : c_int,
+                                          xPtr : c_ptr(real(64)), yPtr : c_ptr(real(64))) {
+  logDebug("Calling ls_chpl_matrix_vector_product ...");
+  var matrix = new Operator(matrixPtr, owning=false);
+  if matrix.basis.numberWords != 1 then
+    halt("bases with more than 64 bits are not yet implemented");
+  if matrix.basis.requiresProjection() then
+    halt("bases that require projection are not yet supported");
+  if numVectors != 1 then
+    halt("applying the Operator to more than 1 vector is not yet implemented");
+
+  const ref representatives = matrix.basis.representatives();
+  const numStates = representatives.size;
+  var x = makeArrayFromPtr(xPtr, (numStates,));
+  var y = makeArrayFromPtr(yPtr, (numStates,));
+  localMatrixVector(matrix, x, y, representatives);
+  logDebug("Done!");
+}
+
 /*
 proc localMatrixVectorPart(
       H : Operator,

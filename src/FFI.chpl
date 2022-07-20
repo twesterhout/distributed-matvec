@@ -38,6 +38,35 @@ module FFI {
     return externalArr;
   }
 
+  inline proc _makeInds(shape: int ...?n) {
+    var inds : n * range;
+    foreach i in 0 ..# n {
+      inds[i] = 0 ..# shape[i];
+    }
+    return inds;
+  }
+
+  pragma "no copy return"
+  proc makeArrayFromPtr(ptr : c_ptr, shape)
+      where isTuple(shape) && isHomogeneousTuple(shape) && shape[0].type == int {
+    var dom = defaultDist.dsiNewRectangularDom(rank=shape.size,
+                                               idxType=shape[0].type,
+                                               stridable=false,
+                                               inds=_makeInds((...shape)));
+    dom._free_when_no_arrs = true;
+    var arr = new unmanaged DefaultRectangularArr(eltType=ptr.eltType,
+                                                  rank=dom.rank,
+                                                  idxType=dom.idxType,
+                                                  stridable=dom.stridable,
+                                                  dom=dom,
+                                                  data=ptr:_ddata(ptr.eltType),
+                                                  externFreeFunc=nil,
+                                                  externArr=true,
+                                                  _borrowed=true);
+    dom.add_arr(arr, locking = false);
+    return _newArray(arr);
+  }
+
   proc logDebug(msg...) {
     try! stderr.writeln("[Debug]   [", here, "]   ", (...msg));
   }
@@ -98,6 +127,8 @@ module FFI {
   extern proc ls_hs_destroy_basis_v2(basis : c_ptr(ls_hs_basis));
   extern proc ls_hs_min_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
   extern proc ls_hs_max_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
+  extern proc ls_hs_basis_number_bits(basis : c_ptr(ls_hs_basis)) : c_int;
+  extern proc ls_hs_basis_number_words(basis : c_ptr(ls_hs_basis)) : c_int;
 
   extern proc ls_hs_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
   extern proc ls_hs_basis_to_json(basis : c_ptr(ls_hs_basis)) : c_string;
@@ -165,6 +196,9 @@ module FFI {
 
   extern record ls_chpl_kernels {
     var enumerate_states : c_fn_ptr;
+    var operator_apply_off_diag : c_fn_ptr;
+    var operator_apply_diag : c_fn_ptr;
+    var matrix_vector_product : c_fn_ptr;
   }
   extern proc ls_hs_internal_set_chpl_kernels(kernels : c_ptr(ls_chpl_kernels));
 

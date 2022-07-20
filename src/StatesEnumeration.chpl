@@ -271,15 +271,6 @@ export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
   dest.deref() = convertToExternalArray(v);
 }
 
-proc initExportedKernels() {
-  var kernels = new ls_chpl_kernels(
-    c_ptrTo(ls_chpl_enumerate_representatives)
-  );
-  logDebug("Initializing chpl_kernels ...");
-  ls_hs_internal_set_chpl_kernels(c_ptrTo(kernels));
-}
-
-
 proc determineMergeBounds(const ref basisStates : [] uint(64), numChunks : int) {
   assert(basisStates.size >= numChunks);
   assert(numChunks > 1);
