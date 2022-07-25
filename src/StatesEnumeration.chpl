@@ -557,19 +557,13 @@ proc _enumStatesDistribute(const ref buckets, ref masks,
   var distributeTimer = new Timer();
   distributeTimer.start();
 
-  const basisStatesPtrsPtr = c_const_ptrTo(basisStatesPtrs);
-  const mainLocaleIdx = here.id;
   const numChunks = counts.shape[0];
   coforall loc in Locales do on loc {
     const mySubdomain = buckets.localSubdomain();
     const myCounts : [0 ..# numChunks, 0 ..# numLocales] int = counts;
     const myOffsets : [0 ..# numChunks, 0 ..# numLocales] int = offsets;
+    const myDestPtrs : [0 ..# numLocales] c_ptr(uint(64)) = basisStatesPtrs;
     const myMasksDescriptors : [0 ..# numChunks] (int, c_ptr(uint(8))) = masksDescriptors;
-    // Simple assignment fails with a segmentation fault when compiling with
-    // CHPL_COMM=none... no idea why, but the following is a workaround
-    var myDestPtrs : [0 ..# numLocales] c_ptr(uint(64)) = noinit;
-    GET(c_ptrTo(myDestPtrs), mainLocaleIdx, basisStatesPtrsPtr,
-        numLocales:c_size_t * c_sizeof(myDestPtrs.eltType));
 
     var myCopyTime : atomic real;
     var myMaskCopyTime : atomic real;
@@ -635,14 +629,7 @@ proc enumerateStates(ranges : [] range(uint(64)), const ref basis : Basis, out _
 
   // Allocate space for states
   var basisStates = new BlockVector(uint(64), totalCounts, distribute=true);
-  // logDebug("634: the following is going to fail");
-  // Simple assignment fails with a segmentation fault when compiling with
-  // CHPL_COMM=none. This is a workaround
-  var basisStatesPtrs : [0 ..# numLocales] c_ptr(uint(64)) = noinit;
-  c_memcpy(c_ptrTo(basisStatesPtrs), c_const_ptrTo(basisStates._dataPtrs),
-           numLocales:c_size_t * c_sizeof(c_ptr(uint(64))));
-  // logDebug("634: nope it didn't");
-
+  const basisStatesPtrs = basisStates._dataPtrs;
   // Allocate space for masks
   var masks = _enumStatesMakeMasks(counts, totalCounts);
   var masksDescriptors =
