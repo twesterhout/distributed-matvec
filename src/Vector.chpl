@@ -2,31 +2,20 @@ module Vector {
 
 // TODO: probably shouldn't use it...
 use ArrayViewSlice;
-use BlockDist;
-use CTypes;
 
-private inline proc GET(addr, node, rAddr, size) {
-  __primitive("chpl_comm_get", addr, node, rAddr, size);
-}
-
-private inline proc PUT(addr, node, rAddr, size) {
-  __primitive("chpl_comm_put", addr, node, rAddr, size);
-}
-
-record Vector {
+class Vector {
   type eltType;
-  // _dom specifies the capacity, and _size is the current size
-  var _dom : domain(1, idxType=int, stridable=false);
+  var _dom : domain(1);
   var _arr : [_dom] eltType;
   var _size : int;
 
-  proc init(type eltType) {
-    this.eltType = eltType;
+  proc init(type t) {
+    this.eltType = t;
     this._size = 0;
   }
   proc init(arr : [] ?t) {
     this.eltType = t;
-    this._dom = {0 ..# arr.size};
+    this._dom = arr.dom;
     this._arr = arr;
     this._size = arr.size;
   }
@@ -41,12 +30,6 @@ record Vector {
   proc reserve(capacity : int) {
     if capacity > _dom.size then
       _dom = {0 ..# capacity};
-  }
-
-  proc resize(newSize : int) {
-    if newSize > _size then
-      reserve(newSize);
-    _size = newSize;
   }
 
   inline proc size { return _size; }
@@ -95,162 +78,82 @@ record Vector {
   }
 }
 
-proc isVector(type x : Vector) param { return true; }
-// proc isVector(type x : shared Vector) param { return true; }
-// proc isVector(type x : borrowed Vector) param { return true; }
-// proc isVector(type x : unmanaged Vector) param { return true; }
+proc isVector(type x : owned Vector) param { return true; }
+proc isVector(type x : shared Vector) param { return true; }
+proc isVector(type x : borrowed Vector) param { return true; }
+proc isVector(type x : unmanaged Vector) param { return true; }
 proc isVector(type x) param { return false; }
-
-proc _getDataPtrs(type eltType, const ref counts, ref data) {
-  const size = counts.size;
-  // logDebug("_getDataPtrs(", eltType:string, ", counts=", counts, ", ", data.domain, ")");
-  // assert(data.size == size);
-  // assert(data.size > 0);
-  // assert(data[0].size > 0);
-  var dataPtrs : [0 ..# size] c_ptr(eltType);
-  if size == 0 then return dataPtrs;
-
-  const dataPtrsPtr = c_ptrTo(dataPtrs);
-  const localeIdx = here.id;
-  forall (c, i) in zip(counts, 0 ..) {
-    assert(here == c.locale);
-    ref myData = data[i];
-    // if myData.domain.rank == 1 then
-    //   assert(myData.domain.low == 0);
-    const myDataPtr = if myData.size > 0
-                        then c_ptrTo(data[i][myData.domain.low])
-                        else nil;
-    dataPtrs[i] = myDataPtr;
-    // if here.id != localeIdx then
-    //   PUT(myDataPtr, localeIdx, dataPtrsPtr + i, c_sizeof(c_ptr(eltType)));
-    // else
-    //   dataPtrsPtr[i] = myDataPtr;
-  }
-  return dataPtrs;
-}
-
-
-record LocBlockVector {
-  type eltType;
-  param rank : int;
-  var dom : domain(rank);
-  var data : [dom] eltType;
-  var count : int;
-
-  forwarding data only this;
-}
-
-proc getBlockPtrs(arr) {
-  type eltType = arr.eltType.eltType;
-  var ptrs : [0 ..# arr.size] c_ptr(eltType);
-  for i in arr.dim(0) {
-    ref locBlock = arr[i];
-    if locBlock.dom.size > 0 {
-      ref x = locBlock.data[locBlock.dom.low];
-      ptrs[i] = __primitive("_wide_get_addr", x):c_ptr(eltType);
-    }
-  }
-  return ptrs;
-}
-
-proc getOuterDom(numBlocks : int, param distribute : bool) {
-  const box = {0 ..# numBlocks};
-  return if distribute then box dmapped Block(box, Locales)
-                       else box;
-}
-
-proc getInnerDom(counts : [] int) {
-  const maxNumElts = max reduce counts;
-  return {0 ..# maxNumElts};
-}
-proc getInnerDom(batchSize : int, counts : [] int) {
-  const maxNumElts = max reduce counts;
-  return {0 ..# batchSize, 0 ..# maxNumElts};
-}
 
 class BlockVector {
   type eltType;
   param innerRank : int;
-  var outerDom;
-  var _locBlocks : [outerDom] LocBlockVector(eltType, innerRank);
-  var _dataPtrs;
+  var _outerDom;
+  var _counts : [_outerDom] int;
+  var _innerDom : domain(innerRank);
+  var _data : [_outerDom] [_innerDom] eltType;
 
-  proc finalizeInitialization(innerDom : domain(innerRank), counts) {
-    forall (i, n) in zip(outerDom, counts) {
-      _locBlocks[i].dom = innerDom;
-      _locBlocks[i].count = n;
-    }
-    _dataPtrs = getBlockPtrs(_locBlocks);
+  proc init(type eltType, counts : [] int, outerDom) {
+    this.eltType = eltType;
+    this.innerRank = 1;
+    this._outerDom = outerDom;
+    this._counts = counts;
+    const maxNumElts = max reduce _counts;
+    this._innerDom = {0 ..# maxNumElts};
   }
-  inline proc finalizeInitialization(counts : [] int) {
-    finalizeInitialization(getInnerDom(counts), counts);
-  }
-  inline proc finalizeInitialization(batchSize : int, counts : [] int) {
-    finalizeInitialization(getInnerDom(batchSize, counts), counts);
-  }
-
-  proc init(type t, param rank : int, numBlocks : int, param distribute : bool) {
-    this.eltType = t;
-    this.innerRank = rank;
-    const dom = getOuterDom(numBlocks, distribute);
-    this.outerDom = dom;
-    this._locBlocks = [i in dom] new LocBlockVector(t, rank);
-    this._dataPtrs = [i in 0 ..# numBlocks] nil:c_ptr(t);
+  proc init(type eltType, counts : [] int) {
+    init(eltType, counts, counts.domain);
   }
 
-  proc init(type t, counts : [] int, param distribute : bool = true) {
-    init(t, 1, counts.size, distribute);
-    finalizeInitialization(counts);
+  proc init(type eltType, batchSize : int, counts : [] int, outerDom) {
+    this.eltType = eltType;
+    this.innerRank = 2;
+    this._outerDom = outerDom;
+    this._counts = counts;
+    const maxNumElts = max reduce _counts;
+    this._innerDom = {0 ..# batchSize, 0 ..# maxNumElts};
+  }
+  proc init(type eltType, batchSize : int, counts : [] int) {
+    init(eltType, batchSize, counts, counts.domain);
   }
 
-  proc init(type t, batchSize : int, counts : [] int, param distribute : bool = true) {
-    init(t, 2, counts.size, distribute);
-    finalizeInitialization(batchSize, counts);
-  }
-
-  proc init(chunks : [] ?t, param distribute : bool = true)
+  proc init(chunks : [] ?t)
       where chunks.domain.rank == 1 && isVector(t) {
-    init(t.eltType, 1, chunks.size, distribute);
-    const counts : [0 ..# chunks.size] int = [c in chunks] c.size;
-    finalizeInitialization(counts);
-    forall (locBlock, chunk) in zip(this._locBlocks, chunks) {
-      locBlock.data[0 ..# chunk.size] = chunk.toArray();
+    this.eltType = chunks[0].eltType;
+    this.innerRank = 1;
+    this._outerDom = chunks.domain;
+    this._counts = [v in chunks] v.size;
+    const maxNumElts = max reduce _counts;
+    this._innerDom = {0 ..# maxNumElts};
+    this.complete();
+    forall (arr, count, chunk) in zip(this._data, this._counts, chunks) {
+      arr[0 ..# count] = chunk.toArray();
     }
   }
 
-  // proc init(chunks : [] ?eltType, counts : [] int)
-  //     where !isArray(eltType) {
-  //   this.eltType = eltType;
-  //   this.innerRank = chunks.rank - 1;
-  //   this._outerDom = counts.domain;
-  //   this._counts = counts;
-  //   const maxNumElts = max reduce _counts;
-  //   this._innerDom = {0 ..# maxNumElts};
-  //   this._dataPtrsDom = {0 ..# counts.size};
-  //   this.complete();
-  //   this._dataPtrs = _getDataPtrs(eltType, _counts, _data);
-  //   forall (arr, count, i) in zip(this._data, this._counts, 0 ..) {
-  //     arr[0 ..# count] = chunks[i, 0 ..# count];
-  //   }
-  // }
+  proc init(chunks : [] ?eltType, counts : [] int)
+      where !isArray(eltType) {
+    this.eltType = eltType;
+    this.innerRank = chunks.rank - 1;
+    this._outerDom = counts.domain;
+    this._counts = counts;
+    const maxNumElts = max reduce _counts;
+    this._innerDom = {0 ..# maxNumElts};
+    this.complete();
+    forall (arr, count, i) in zip(this._data, this._counts, 0 ..) {
+      arr[0 ..# count] = chunks[i, 0 ..# count];
+    }
+  }
 
-  inline proc numBlocks { return outerDom.size; }
-  inline proc count(i) { return _locBlocks[i].count; }
-
-  inline proc counts { return _locBlocks.count; }
-
-  inline proc innerDom { return _locBlocks[0].dom; }
-
-  inline proc _data ref { return _locBlocks; }
+  inline proc numBlocks { return _outerDom.size; }
+  inline proc count(i) { return _counts[i]; }
 
   inline proc getBlockDomain(blockIdx : int)
       where innerRank == 1 {
-    return {0 ..# count(blockIdx)};
+    return {0 ..# _counts[blockIdx]};
   }
   inline proc getBlockDomain(blockIdx : int)
       where innerRank == 2 {
-    return {0 ..# _locBlocks[blockIdx].data.shape[0],
-            0 ..# _locBlocks[blockIdx].count};
+    return {0 ..# _innerDom.dim(0).size, 0 ..# _counts[blockIdx]};
   }
 
   pragma "reference to const when const this"
@@ -262,8 +165,7 @@ class BlockVector {
     var a = new unmanaged ArrayViewSliceArr(
         eltType=eltType,
         _DomPid=d._pid, dom=d._instance,
-        _ArrPid=_locBlocks[blockIdx].data._pid,
-        _ArrInstance=_locBlocks[blockIdx].data._value);
+        _ArrPid=_data[blockIdx]._pid, _ArrInstance=_data[blockIdx]._value);
     d._value.add_arr(a, locking=false, addToList=false);
     return _newArray(a);
   }
@@ -272,31 +174,12 @@ class BlockVector {
   pragma "fn returns aliasing array"
   inline proc this(loc : locale) { return getBlock(loc.id); }
 
-  inline proc this(i : int, j : int) ref where innerRank == 1 {
-    return _locBlocks[i].data[j];
+  inline proc this(i : int, j) ref where innerRank == 1 {
+    return _data[i][j];
   }
-
-  pragma "reference to const when const this"
-  pragma "fn returns aliasing array"
-  inline proc this(i : int, j : range(int)) ref where innerRank == 1 {
-    pragma "no auto destroy" var d = {j};
-    d._value._free_when_no_arrs = true;
-    d._value.definedConst = true;
-    var a = new unmanaged ArrayViewSliceArr(
-        eltType=eltType,
-        _DomPid=d._pid, dom=d._instance,
-        _ArrPid=_locBlocks[i].data._pid,
-        _ArrInstance=_locBlocks[i].data._value);
-    d._value.add_arr(a, locking=false, addToList=false);
-    return _newArray(a);
+  inline proc this(i : int, j, k) ref where innerRank == 2 {
+    return _data[i][j, k];
   }
-
-  inline proc this(i : int, j...) ref where innerRank != 1 {
-    return _locBlocks[i].data[(...j)];
-  }
-  // inline proc this(i : int, j, k) ref where innerRank == 2 {
-  //   return _locBlocks[i].data[j, k];
-  // }
 }
 
 } // end module Vector
