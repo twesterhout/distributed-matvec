@@ -92,6 +92,8 @@ data/large-scale:
 	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Flarge-scale && \
 	unzip tmp.zip && rm tmp.zip
 
+lib: lib/liblattice_symmetries_chapel.so
+
 lib/liblattice_symmetries_chapel.so: $(MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) --library --dynamic -o lattice_symmetries_chapel $^ $(LDFLAGS)
