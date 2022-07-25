@@ -24,10 +24,11 @@ MODULES = src/LatticeSymmetries.chpl \
 	  src/CommunicationQueue.chpl \
 	  src/DistributedMatrixVector.chpl \
 	  src/MultiwayMerge.chpl \
+	  src/Vector.chpl \
 	  src/helper.c
 
 .PHONY: all
-all: test examples
+all: examples
 
 ifeq ($(UNAME), Linux)
   CHPL_LIBS = LD_LIBRARY_PATH=$(PWD)/third_party/lib:$$LD_LIBRARY_PATH
@@ -88,6 +89,10 @@ data/large-scale:
 	mkdir -p data && cd data && \
 	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Flarge-scale && \
 	unzip tmp.zip && rm tmp.zip
+
+lib/liblattice_symmetries_chapel.so: $(MODULES)
+	@mkdir -p $(@D)
+	chpl $(CFLAGS) --library --dynamic -o lattice_symmetries_chapel $^ $(LDFLAGS)
 
 bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(MODULES)
 	@mkdir -p $(@D)
