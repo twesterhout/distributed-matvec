@@ -7,22 +7,12 @@ proc localLoadVectors(filename : string, x : string = "/x", y : string = "/y") {
   return (input, output);
 }
 
-config const kSystem = "heisenberg_chain";
-config const kNumSpins = 10;
-
-proc makeFilename(system, numSpins, extension) {
-  return system + "_" + numSpins:string + "." + extension;
-}
-
-config const kHamiltonian = "data/" + makeFilename(kSystem, kNumSpins, "yaml");
-config const kVectors = if kNumSpins < 24
-                          then "data/matvec/" +
-                                  makeFilename(kSystem, kNumSpins, "h5")
-                          else "data/large-scale/matvec/" +
-                                  makeFilename(kSystem, kNumSpins, "h5");
+config const kHamiltonian = "data/heisenberg_chain_10.yaml";
+config const kVectors = "data/matvec/heisenberg_chain_10.h5";
 config const kAbsTol = 1e-14;
 config const kRelTol = 1e-12;
 config const kVerbose = false;
+config const kUseNew = false;
 
 proc approxEqual(a : real, b : real, atol = kAbsTol, rtol = kRelTol) {
   return abs(a - b) <= max(atol, rtol * max(abs(a), abs(b)));
@@ -37,17 +27,16 @@ proc main() {
   defer deinitRuntime();
 
   var timer = new Timer();
-  // timer.start();
+  timer.start();
   var matrix = loadHamiltonianFromYaml(kHamiltonian);
-  // timer.stop();
-  // logDebug("Reading the Hamiltonian took ", timer.elapsed());
+  timer.stop();
+  logDebug("Reading the Hamiltonian took ", timer.elapsed());
 
-  // timer.clear();
-  // timer.start();
-  const masks;
-  const basisStates = enumerateStates(matrix.basis, masks);
-  // timer.stop();
-  // logDebug("Enumerating basis states took ", timer.elapsed());
+  timer.clear();
+  timer.start();
+  var basisStates = enumerateStates(matrix.basis);
+  timer.stop();
+  logDebug("Enumerating basis states took ", timer.elapsed());
 
   // for (i, n) in zip(0 .., basisStates._counts) do
   //   writeln("basisStates: ", i, ": ", n, " -> ", n.locale);
@@ -55,55 +44,54 @@ proc main() {
   // const (xRaw, yRaw) = localLoadVectors(kVectors);
   // const x = xRaw;
   // const y = xRaw;
-  // if kVerbose then
-  //   writeln(basisStates);
-
-  // timer.clear();
-  // timer.start();
-  // const basisStatesRaw = statesFromHashedToBlock(basisStates);
-  // timer.stop();
-  // logDebug("Merging states took ", timer.elapsed());
+  if kVerbose then
+    writeln(basisStates);
 
   timer.clear();
   timer.start();
-  const xBlock = readVectorsAsBlocks(kVectors, "/x");
+  const basisStatesRaw = statesFromHashedToBlock(basisStates);
+  timer.stop();
+  logDebug("Merging states took ", timer.elapsed());
+
+  timer.clear();
+  timer.start();
+  const xRaw = readVectorsAsBlocks(kVectors, "/x");
   timer.stop();
   logDebug("Reading X took ", timer.elapsed());
 
-  // timer.clear();
-  // timer.start();
-  // const masks = [x in basisStatesRaw] localeIdxOf(x);
-  // timer.stop();
-  // logDebug("Computing masks took ", timer.elapsed());
+  timer.clear();
+  timer.start();
+  const masks = [x in basisStatesRaw] localeIdxOf(x);
+  timer.stop();
+  logDebug("Computing masks took ", timer.elapsed());
 
-  const x = arrFromBlockToHashed(xBlock, masks);
-  // timer.clear();
-  // timer.start();
-  // const x = if kUseNew then arrFromBlockToHashed(masks, xRaw)
-  //                      else vectorsFromBlockToHashed(basisStatesRaw, xRaw);
-  // timer.stop();
-  // logDebug("Distributing X took ", timer.elapsed());
+  timer.clear();
+  timer.start();
+  const x = if kUseNew then arrFromBlockToHashed(masks, xRaw)
+                       else vectorsFromBlockToHashed(basisStatesRaw, xRaw);
+  timer.stop();
+  logDebug("Distributing X took ", timer.elapsed());
 
   // for (i, n) in zip(0 .., x._counts) do
   //   writeln("x: ", i, ": ", n, " -> ", n.locale);
-  var z = new BlockVector(x.eltType, x.innerDom.dim(0).size, x.counts);
+  var z = new BlockVector(x.eltType, x._innerDom.dim(0).size, x._counts);
   // for (i, n) in zip(0 .., z._counts) do
   //   writeln("z: ", i, ": ", n, " -> ", n.locale);
 
   matrixVectorProduct(kHamiltonian, x, z, basisStates);
 
-  const zBlock = arrFromHashedToBlock(z, masks);
-  const yBlock = readVectorsAsBlocks(kVectors, "/y");
-  // const y = vectorsFromBlockToHashed(basisStatesRaw, yRaw);
+  const zRaw = vectorsFromHashedToBlock(basisStates, z);
+  const yRaw = readVectorsAsBlocks(kVectors, "/y");
+  const y = vectorsFromBlockToHashed(basisStatesRaw, yRaw);
   // writeln("y: ", yRaw);
   // writeln("z: ", zRaw);
-  const closeEnough = && reduce approxEqual(yBlock, zBlock);
+  const closeEnough = && reduce approxEqual(yRaw, zRaw);
   writeln(closeEnough);
   if (!closeEnough) {
     var maxErrorCount = 10;
-    for i in yBlock.domain {
-      if !approxEqual(zBlock[i], yBlock[i]) && maxErrorCount > 0 {
-        writeln("at ", i, ": ", zBlock[i], " (computed) != ", yBlock[i], " (expected)");
+    for i in yRaw.domain {
+      if !approxEqual(zRaw[i], yRaw[i]) && maxErrorCount > 0 {
+        writeln("at ", i, ": ", zRaw[i], " != ", yRaw[i]);
         maxErrorCount -= 1;
       }
     }
