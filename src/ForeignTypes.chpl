@@ -112,6 +112,8 @@ module ForeignTypes {
       return ls_hs_basis_has_fixed_hamming_weight(payload);
     }
 
+    proc numberBits : int { return ls_hs_basis_number_bits(payload):int; }
+    proc numberWords : int { return ls_hs_basis_number_words(payload):int; }
     proc numberSites() : int { return payload.deref().number_sites; }
     proc numberParticles() : int { return payload.deref().number_particles; }
     proc numberUp() : int { return payload.deref().number_up; }
@@ -124,6 +126,7 @@ module ForeignTypes {
       // logDebug("ls_hs_max_state_estimate");
       return ls_hs_max_state_estimate(payload);
     }
+
 
     proc representatives() {
       ref rs = payload.deref().representatives;
@@ -217,7 +220,7 @@ module ForeignTypes {
     }
     proc init(raw : c_ptr(ls_hs_operator), owning : bool = true) {
       this.payload = raw;
-      this.basis = new Basis(this.payload.deref().basis);
+      this.basis = new Basis(this.payload.deref().basis, owning=owning);
     }
     proc init=(const ref from : Operator) {
       halt("Operator.init= is not yet implemented");

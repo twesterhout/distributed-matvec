@@ -24,6 +24,7 @@ config const statesFromHashedToBlockNumChunks = 2 * here.maxTaskPar;
 config const statesFromBlockToHashedNumChunks = 2 * numLocales * here.maxTaskPar;
 config const kUseLowLevelComm : bool = true;
 // config const numChunksPerLocale = 3;
+config const enableSegFault : bool = false;
 
 inline proc GET(addr, node, rAddr, size) {
   __primitive("chpl_comm_get", addr, node, rAddr, size);
@@ -557,13 +558,19 @@ proc _enumStatesDistribute(const ref buckets, ref masks,
   var distributeTimer = new Timer();
   distributeTimer.start();
 
+  const basisStatesPtrsPtr = c_const_ptrTo(basisStatesPtrs);
+  const mainLocaleIdx = here.id;
   const numChunks = counts.shape[0];
   coforall loc in Locales do on loc {
     const mySubdomain = buckets.localSubdomain();
     const myCounts : [0 ..# numChunks, 0 ..# numLocales] int = counts;
     const myOffsets : [0 ..# numChunks, 0 ..# numLocales] int = offsets;
-    const myDestPtrs : [0 ..# numLocales] c_ptr(uint(64)) = basisStatesPtrs;
     const myMasksDescriptors : [0 ..# numChunks] (int, c_ptr(uint(8))) = masksDescriptors;
+    // Simple assignment fails with a segmentation fault when compiling with
+    // CHPL_COMM=none... no idea why, but the following is a workaround
+    var myDestPtrs : [0 ..# numLocales] c_ptr(uint(64)) = noinit;
+    GET(c_ptrTo(myDestPtrs), mainLocaleIdx, basisStatesPtrsPtr,
+        numLocales:c_size_t * c_sizeof(myDestPtrs.eltType));
 
     var myCopyTime : atomic real;
     var myMaskCopyTime : atomic real;
@@ -629,7 +636,17 @@ proc enumerateStates(ranges : [] range(uint(64)), const ref basis : Basis, out _
 
   // Allocate space for states
   var basisStates = new BlockVector(uint(64), totalCounts, distribute=true);
-  const basisStatesPtrs = basisStates._dataPtrs;
+  // logDebug("634: the following is going to fail");
+  // Simple assignment fails with a segmentation fault when compiling with
+  // CHPL_COMM=none. This is a workaround
+  var basisStatesPtrs : [0 ..# numLocales] c_ptr(uint(64)) = noinit;
+  if enableSegFault then
+    basisStatesPtrs = basisStates._dataPtrs;
+  else
+    c_memcpy(c_ptrTo(basisStatesPtrs), c_const_ptrTo(basisStates._dataPtrs),
+             numLocales:c_size_t * c_sizeof(c_ptr(uint(64))));
+  // logDebug("634: nope it didn't");
+
   // Allocate space for masks
   var masks = _enumStatesMakeMasks(counts, totalCounts);
   var masksDescriptors =
@@ -678,15 +695,6 @@ export proc ls_chpl_enumerate_representatives(p : c_ptr(ls_hs_basis),
   // writeln(v._value.isDefaultRectangular():string);
   dest.deref() = convertToExternalArray(v);
 }
-
-proc initExportedKernels() {
-  var kernels = new ls_chpl_kernels(
-    c_ptrTo(ls_chpl_enumerate_representatives)
-  );
-  logDebug("Initializing chpl_kernels ...");
-  ls_hs_internal_set_chpl_kernels(c_ptrTo(kernels));
-}
-
 
 proc determineMergeBounds(const ref basisStates : [] uint(64), numChunks : int) {
   assert(basisStates.size >= numChunks);

@@ -8,6 +8,7 @@ use ChapelLocks;
 use FFI;
 use ForeignTypes;
 use ConcurrentAccessor;
+use StatesEnumeration;
 
 config const communicationQueueBufferSize = 32000;
 config const stagingBuffersBufferSize = 100;
