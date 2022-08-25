@@ -393,6 +393,7 @@ config const kNumTasks = here.maxTaskPar;
 config const kNumConsumerTasks = 1;
 config const kVerbose = false;
 config const specialCase = false;
+config const kUseConsumer : bool = false;
 
 extern proc chpl_task_getId(): chpl_taskID_t;
 
@@ -629,7 +630,7 @@ record Consumer {
         }
       }
       this.slots = pairs;
-      logDebug("Slots: ", slots);
+      // logDebug("Slots: ", slots);
     }
     else {
       var pairs : [0 ..# 0] (int, int);
@@ -653,6 +654,7 @@ record Consumer {
     // logDebug("numProcessed = ", numProcessedPtr.deref().read(),
     //          ", totalNumberChunks = ", totalNumberChunks);
     while numProcessedPtr.deref().read() < totalNumberChunks {
+      var hasDoneWork = false;
       for (localeIdx, otherTaskIdx) in slots {
       // for localeIdx in 0 ..# numLocales {
       //   for otherTaskIdx in 0 ..# numProducerTasks {
@@ -676,16 +678,19 @@ record Consumer {
               atomicStoreBool(atomicPtr, false);
             }
 
+            hasDoneWork = true;
+            // chpl_task_yield();
+
             // logDebug("Done with localProcess in Consumer(", _taskIdx, ")...");
           }
       //  }
       }
-      chpl_task_yield();
+
+      if !hasDoneWork then chpl_task_yield();
     }
   }
 }
 
-config const kUseConsumer : bool = false;
 
 private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                                      const ref representatives : [] uint(64),
@@ -758,8 +763,7 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
       producer.run();
     }
     else {
-
-      if kUseConsumer {
+      // if kUseConsumer {
         var consumer = new Consumer(
           taskIdx - numProducerTasks,
           numConsumerTasks,
@@ -771,53 +775,42 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
           newLocalBuffers);
 
         consumer.run();
-      }
-      else {
-        // startVerboseCommHere();
-        // I'm a consumer
-        // logDebug("totalNumberChunks = ", totalNumberChunks);
-        var consumer = new Consumer(
-          taskIdx - numProducerTasks,
-          numConsumerTasks,
-          numProducerTasks,
-          matrix.basis,
-          accessor,
-          totalNumberChunks,
-          numProcessedChunks,
-          newLocalBuffers);
+      // }
+      // else {
+      //   var consumer = new Consumer(
+      //     taskIdx - numProducerTasks,
+      //     numConsumerTasks,
+      //     numProducerTasks,
+      //     matrix.basis,
+      //     accessor,
+      //     totalNumberChunks,
+      //     numProcessedChunks,
+      //     newLocalBuffers);
 
-        // logDebug("Starting Consumer(", taskIdx, ")...");
-        while consumer.numProcessedPtr.deref().read() < totalNumberChunks {
-          for localeIdx in 0 ..# numLocales {
-            for otherTaskIdx in 0 ..# consumer.numProducerTasks {
-              ref localBuffer = newLocalBuffers[localeIdx, otherTaskIdx];
-              if !localBuffer.isEmpty.read() {
-                // logDebug("Calling localProcess in Consumer(", taskIdx, ")...");
-                localProcess(consumer.basisPtr,
-                             consumer.accessorPtr,
-                             // c_const_ptrTo(matrix.basis), c_const_ptrTo(accessor),
-                             localBuffer.basisStates,
-                             localBuffer.coeffs,
-                             localBuffer.size);
-                localBuffer.isEmpty.write(true);
-                const atomicPtr = localBuffer.isFull;
+      //   while consumer.numProcessedPtr.deref().read() < totalNumberChunks {
+      //     for localeIdx in 0 ..# numLocales {
+      //       for otherTaskIdx in 0 ..# consumer.numProducerTasks {
+      //         ref localBuffer = newLocalBuffers[localeIdx, otherTaskIdx];
+      //         if !localBuffer.isEmpty.read() {
+      //           localProcess(consumer.basisPtr,
+      //                        consumer.accessorPtr,
+      //                        localBuffer.basisStates,
+      //                        localBuffer.coeffs,
+      //                        localBuffer.size);
+      //           localBuffer.isEmpty.write(true);
+      //           const atomicPtr = localBuffer.isFull;
 
-                // logDebug("Calling on Locales[...] in Consumer(", taskIdx, ")...");
-                on Locales[localBuffer.srcLocaleIdx] {
-                  atomicStoreBool(atomicPtr, false);
-                }
+      //           on Locales[localBuffer.srcLocaleIdx] {
+      //             atomicStoreBool(atomicPtr, false);
+      //           }
 
-                consumer.numProcessedPtr.deref().add(1);
-                // logDebug("Done with localProcess in Consumer(", taskIdx, ")...");
-              }
-            }
-          }
-          chpl_task_yield();
-        }
-        // logDebug("Done with Consumer(", taskIdx, ")...");
-        // stopVerboseCommHere();
-
-      }
+      //           consumer.numProcessedPtr.deref().add(1);
+      //         }
+      //       }
+      //     }
+      //     chpl_task_yield();
+      //   }
+      // }
 
       
     }
