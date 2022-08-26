@@ -32,6 +32,7 @@ def generate(basis_filename: str, output_filename: str, batch_size: int = 1):
     print("{} spent in matrix-vector using OpenMP".format(tock - tick))
 
     with h5py.File(output_filename, "w") as out:
+        out["/representatives"] = hamiltonian.basis.states
         out["/x"] = x.T
         out["/y"] = y.T
 
@@ -41,10 +42,16 @@ def main():
     # generate("data/heisenberg_square_5x5.yaml", "data/matvec/heisenberg_square_5x5.h5", 1)
     # generate("data/heisenberg_square_6x6.yaml", "data/matvec/heisenberg_square_6x6.h5", 1)
     # generate("data/old/heisenberg_chain_20.yaml", "data/matvec/heisenberg_chain_20.h5", 1)
-    for i in [10, 12, 16, 20, 24, 28, 32]:
+    for i in [10]: # , 12, 16, 20, 24, 28, 32]:
         generate(
             "data/old/heisenberg_chain_{}.yaml".format(i),
             "data/matvec/heisenberg_chain_{}.h5".format(i),
+            1,
+        )
+    for i in [12]:
+        generate(
+            "data/old/heisenberg_kagome_{}_symm.yaml".format(i),
+            "data/matvec/heisenberg_kagome_{}_symm.h5".format(i),
             1,
         )
 

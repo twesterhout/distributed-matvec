@@ -1,23 +1,34 @@
 use LatticeSymmetries;
 use Time;
 
-proc localLoadRepresentatives(filename : string, dataset : string = "/basis/representatives") {
+proc localLoadRepresentatives(filename : string, dataset : string = "/representatives") {
   return readDataset(filename, dataset, uint(64), rank = 1);
 }
 
-config const kBasis = "data/heisenberg_kagome_12.yaml";
+config const kHamiltonian = "data/heisenberg_kagome_12.yaml";
 config const kRepresentatives = "data/heisenberg_kagome_12.h5";
 
 proc main() {
-  ls_hs_init();
+  initRuntime();
+  defer deinitRuntime();
 
   const reference = localLoadRepresentatives(kRepresentatives);
-  var basis = loadBasisFromYaml(kBasis);
+  var matrix = loadHamiltonianFromYaml(kHamiltonian);
+  ref basis = matrix.basis;
+
+  var masks;
+  const states = enumerateStates(basis, masks);
+  for loc in Locales do
+    writeln(states[loc]);
+
+  if numLocales > 1 then return 0;
+
   var timer = new Timer();
   timer.start();
   basis.build();
   timer.stop();
   const ref predicted = basis.representatives();
+  writeln(predicted.size);
   const theSame = && reduce [i in reference.domain] reference[i] == predicted[i];
   if !theSame {
     ref predicted = basis.representatives();
@@ -30,8 +41,5 @@ proc main() {
     }
   }
   writeln(timer.elapsed());
-}
-
-proc deinit() {
-  ls_hs_exit();
+  return 0;
 }
