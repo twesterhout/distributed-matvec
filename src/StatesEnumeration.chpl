@@ -439,7 +439,7 @@ inline proc _enumStatesMakeBuckets(numChunks : int) {
 proc _enumStatesComputeCounts(ref buckets,
                               const ref ranges : [] range(uint(64)),
                               const ref basis : Basis) {
-  assert(!basis.requiresProjection());
+  // assert(!basis.requiresProjection());
   assert(basis.isStateIndexIdentity() || basis.isHammingWeightFixed());
   assert(here.id == 0);
 
@@ -577,31 +577,33 @@ proc _enumStatesDistribute(const ref buckets, ref masks,
     forall bucketIdx in mySubdomain {
       const ref (myStates, myMasks) = buckets.localAccess(bucketIdx);
 
-      // Distributing states
-      const copyTime =
-        permuteBasedOnMasks(myStates.size,
-                            c_const_ptrTo(myMasks[0]),
-                            c_const_ptrTo(myStates[0]),
-                            myCounts[bucketIdx, ..],
-                            myOffsets[bucketIdx, ..],
-                            myDestPtrs);
-      myCopyTime.add(copyTime, memoryOrder.relaxed);
+      if myStates.size > 0 {
+        // Distributing states
+        const copyTime =
+          permuteBasedOnMasks(myStates.size,
+                              c_const_ptrTo(myMasks[0]),
+                              c_const_ptrTo(myStates[0]),
+                              myCounts[bucketIdx, ..],
+                              myOffsets[bucketIdx, ..],
+                              myDestPtrs);
+        myCopyTime.add(copyTime, memoryOrder.relaxed);
 
-      // Distributing masks
-      var timer = new Timer();
-      timer.start();
-      const (localeOrOffset, targetPtr) = myMasksDescriptors[bucketIdx];
-      if targetPtr != nil {
-        const targetLocaleIdx = localeOrOffset;
-        PUT(c_const_ptrTo(myMasks._arr[0]), targetLocaleIdx, targetPtr,
-            myMasks.size:c_size_t * c_sizeof(uint(8)));
+        // Distributing masks
+        var timer = new Timer();
+        timer.start();
+        const (localeOrOffset, targetPtr) = myMasksDescriptors[bucketIdx];
+        if targetPtr != nil {
+          const targetLocaleIdx = localeOrOffset;
+          PUT(c_const_ptrTo(myMasks._arr[0]), targetLocaleIdx, targetPtr,
+              myMasks.size:c_size_t * c_sizeof(uint(8)));
+        }
+        else {
+          const targetOffset = localeOrOffset;
+          masks[targetOffset ..# myMasks.size] = myMasks.toArray();
+        }
+        timer.stop();
+        myMaskCopyTime.add(timer.elapsed(), memoryOrder.relaxed);
       }
-      else {
-        const targetOffset = localeOrOffset;
-        masks[targetOffset ..# myMasks.size] = myMasks.toArray();
-      }
-      timer.stop();
-      myMaskCopyTime.add(timer.elapsed(), memoryOrder.relaxed);
     }
 
     copyTimes[loc.id] = myCopyTime.read();
