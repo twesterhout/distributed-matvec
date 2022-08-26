@@ -23,7 +23,10 @@ def load_hamiltonian(filename: str):
 
 def generate(basis_filename: str, output_filename: str, batch_size: int = 1):
     hamiltonian = load_hamiltonian(basis_filename)
+    tick = time.time()
     hamiltonian.basis.build()
+    tock = time.time()
+    print("{} spent building the basis using OpenMP".format(tock - tick))
     x = np.random.rand(hamiltonian.basis.number_states, batch_size) - 0.5
     x = np.asfortranarray(x)
     tick = time.time()
@@ -32,6 +35,7 @@ def generate(basis_filename: str, output_filename: str, batch_size: int = 1):
     print("{} spent in matrix-vector using OpenMP".format(tock - tick))
 
     with h5py.File(output_filename, "w") as out:
+        out["/representatives"] = hamiltonian.basis.states
         out["/x"] = x.T
         out["/y"] = y.T
 
@@ -47,6 +51,11 @@ def main():
             "data/matvec/heisenberg_chain_{}.h5".format(i),
             1,
         )
+    generate(
+        "data/old/heisenberg_chain_24_symm.yaml",
+        "data/matvec/heisenberg_chain_24_symm.h5",
+        1,
+    )
 
 
 if __name__ == "__main__":
