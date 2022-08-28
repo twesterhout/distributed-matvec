@@ -48,21 +48,28 @@ def main():
     # generate("data/heisenberg_square_5x5.yaml", "data/matvec/heisenberg_square_5x5.h5", 1)
     # generate("data/heisenberg_square_6x6.yaml", "data/matvec/heisenberg_square_6x6.h5", 1)
     # generate("data/old/heisenberg_chain_20.yaml", "data/matvec/heisenberg_chain_20.h5", 1)
-    for i in [10]: # , 12, 16, 20, 24, 28, 32]:
+    for i in [10, 12, 16, 20, 24, 28, 32]:
         generate(
             "data/old/heisenberg_chain_{}.yaml".format(i),
             "data/matvec/heisenberg_chain_{}.h5".format(i),
             1,
+            skip=True
         )
     generate(
         "data/old/heisenberg_chain_24_symm.yaml",
         "data/matvec/heisenberg_chain_24_symm.h5",
-        1,
     )
     generate(
-        "data/old/heisenberg_kagome_{}_symm.yaml".format(i),
-        "data/matvec/heisenberg_kagome_{}_symm.h5".format(i),
-        1,
+        "data/old/heisenberg_chain_32_symm.yaml",
+        "data/matvec/heisenberg_chain_32_symm.h5",
+    )
+    generate(
+        "data/old/heisenberg_chain_36_symm.yaml",
+        "data/large-scale/matvec/heisenberg_chain_36_symm.h5",
+    )
+    generate(
+        "data/old/heisenberg_kagome_12_symm.yaml",
+        "data/matvec/heisenberg_kagome_12_symm.h5",
     )
 
 

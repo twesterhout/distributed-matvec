@@ -25,6 +25,7 @@ MODULES = src/LatticeSymmetries.chpl \
 	  src/DistributedMatrixVector.chpl \
 	  src/MultiwayMerge.chpl \
 	  src/Vector.chpl \
+	  src/CommonParameters.chpl \
 	  src/helper.c
 
 .PHONY: all

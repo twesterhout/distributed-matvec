@@ -19,14 +19,6 @@ config const stagingBuffersBlockSize = 128;
 //   return __primitive("_wide_get_addr", p): c_ptr(p.type);
 // }
 
-inline proc GET(addr, node, rAddr, size) {
-  __primitive("chpl_comm_get", addr, node, rAddr, size);
-}
-
-inline proc PUT(addr, node, rAddr, size) {
-  __primitive("chpl_comm_put", addr, node, rAddr, size);
-}
-
 proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccessor(?coeffType)),
                   basisStates : c_ptr(uint(64)), coeffs : c_ptr(?t), size : int) {
   var timer = new Timer();

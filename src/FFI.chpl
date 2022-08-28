@@ -19,6 +19,14 @@ module FFI {
     return c_pointer_return(x);
   }
 
+  inline proc GET(addr, node, rAddr, size) {
+    __primitive("chpl_comm_get", addr, node, rAddr, size);
+  }
+
+  inline proc PUT(addr, node, rAddr, size) {
+    __primitive("chpl_comm_put", addr, node, rAddr, size);
+  }
+
   proc unsafeViewAsExternalArray(const ref arr: []): chpl_external_array {
     if !isIntegralType(arr.domain.idxType) {
       // Probably not reachable any more, but may become reachable again
