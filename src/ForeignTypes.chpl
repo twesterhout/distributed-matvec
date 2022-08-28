@@ -234,9 +234,10 @@ module ForeignTypes {
     }
 
     inline proc numberOffDiagTerms() : int {
-      const p = payload.deref().off_diag_terms;
-      if (p == nil) { return 0; }
-      return p.deref().number_terms:int;
+      return ls_hs_operator_max_number_off_diag(payload):int;
+      // const p = payload.deref().off_diag_terms;
+      // if (p == nil) { return 0; }
+      // return p.deref().number_terms:int;
     }
 
     proc writeTerms() {

@@ -7,6 +7,7 @@ use Time;
 use DynamicIters;
 use CommDiagnostics;
 use ChapelLocks;
+import Random;
 
 use CommonParameters;
 use FFI;
@@ -252,29 +253,16 @@ record _LocalBuffer {
   var isEOF : chpl__processorAtomicType(bool);
 
   proc postinit() {
+    assert(destLocaleIdx == here.id);
     isEmpty.write(true);
     isEOF.write(false);
-    assert(destLocaleIdx == here.id);
-    // isFull.store(false);
-    // const rvf_size = size;
-    // on Locales[destLocaleIdx] {
-      basisStates = c_malloc(uint(64), capacity);
-      coeffs = c_malloc(coeffType, capacity);
-      // isEmpty.deref().store(true);
-    // }
+    basisStates = c_malloc(uint(64), capacity);
+    coeffs = c_malloc(coeffType, capacity);
   }
 
   proc deinit() {
-    // assert(!isFull.read());
-    // if basisStates != nil {
-      // assert(coeffs != nil);
-      // const rvf_basisStates = basisStates;
-      // const rvf_coeffs = coeffs;
-      // on Locales[destLocaleIdx] {
-        c_free(basisStates);
-        c_free(coeffs);
-      // }
-    // }
+    c_free(basisStates);
+    c_free(coeffs);
   }
 }
 
@@ -405,6 +393,7 @@ inline proc atomicStoreBool(p : c_ptr(chpl__processorAtomicType(bool)), value : 
   atomic_store_bool(p.deref(), value);
 }
 
+/*
 proc tryProcessLocal(taskIdx : int, srcLocaleIdx : int, newLocalBuffers, matrix, accessor) {
   ref localBuffer = newLocalBuffers[srcLocaleIdx, taskIdx];
   if !localBuffer.isEmpty.read() {
@@ -433,7 +422,9 @@ proc tryProcessLocal(taskIdx : int, newLocalBuffers, matrix, accessor) {
   }
   return hasDoneWork;
 }
+*/
 
+/*
 record LocalOffDiagonalTimers {
   var total : Timer;
   var initialization : Timer;
@@ -442,6 +433,7 @@ record LocalOffDiagonalTimers {
   var wait : real;
   var put : real;
 }
+*/
 
 proc _offDiagMakeLocalBuffers(numTasks : int, remoteBufferSize : int) {
   var localBuffers : [0 ..# numLocales, 0 ..# numTasks] _LocalBuffer(complex(128))
@@ -461,7 +453,8 @@ proc _offDiagInitLocalBuffers(numTasks : int, ref localBuffers, const ref ptrSto
   const destLocaleIdx = localBuffers.locale.id;
   coforall loc in Locales do on loc {
     const srcLocaleIdx = loc.id;
-    const (_basis, _accessor, _remoteBufferPtr, _localBufferPtr, _numChunks) = ptrStore[srcLocaleIdx];
+    const (_basis, _accessor, _remoteBufferPtr,
+           _localBufferPtr, _numChunks) = ptrStore[srcLocaleIdx];
     for taskIdx in 0 ..# numTasks {
       ref remoteBuffer = (_remoteBufferPtr + destLocaleIdx * numTasks + taskIdx).deref();
       localBuffers[srcLocaleIdx, taskIdx].isFull = c_ptrTo(remoteBuffer.isFull);
@@ -473,7 +466,8 @@ proc _offDiagInitRemoteBuffers(numTasks : int, ref remoteBuffers, const ref ptrS
   const srcLocaleIdx = remoteBuffers.locale.id;
   coforall loc in Locales do on loc {
     const destLocaleIdx = loc.id;
-    const (_basis, _accessor, _remoteBufferPtr, _localBufferPtr, _numChunks) = ptrStore[destLocaleIdx];
+    const (_basis, _accessor, _remoteBufferPtr,
+           _localBufferPtr, _numChunks) = ptrStore[destLocaleIdx];
     for taskIdx in 0 ..# numTasks {
       ref myLocalBuffer = (_localBufferPtr + srcLocaleIdx * numTasks + taskIdx).deref();
       ref remoteBuffer = remoteBuffers[destLocaleIdx, taskIdx];
@@ -508,6 +502,9 @@ record Producer {
   var computeOffDiagTimer : Timer;
   var radixOneStepTimer : Timer;
   var localProcessTimer : Timer;
+  var localProcessAllocating : real;
+  var localProcessIndexing : real;
+  var localProcessAccessing : real;
   var putSize : int;
   var putTimer : Timer;
   var fastOnTimer : Timer;
@@ -540,6 +537,9 @@ record Producer {
     this.computeOffDiagTimer = new Timer();
     this.radixOneStepTimer = new Timer();
     this.localProcessTimer = new Timer();
+    this.localProcessAllocating = 0;
+    this.localProcessIndexing = 0;
+    this.localProcessAccessing = 0;
     this.putSize = 0;
     this.putTimer = new Timer();
     this.fastOnTimer = new Timer();
@@ -547,7 +547,7 @@ record Producer {
     // logDebug("Done creating Producer(", taskIdx, ")...");
   }
 
-  proc remoteBuffers(localeIdx : int, taskIdx : int) ref {
+  inline proc remoteBuffers(localeIdx : int, taskIdx : int) ref {
     assert(0 <= localeIdx && localeIdx < numLocales);
     assert(0 <= taskIdx && taskIdx < numProducerTasks);
     return remoteBuffersPtr[localeIdx * numProducerTasks + taskIdx];
@@ -623,12 +623,16 @@ record Producer {
         ref remoteBuffer = remoteBuffers[destLocaleIdx, _taskIdx];
         localProcessTimer.start();
         assert(!remoteBuffer.isFull.read());
-        localProcess(basisPtr,
-                     accessorPtr,
-                     basisStatesPtr + k,
-                     coeffsPtr + k,
-                     n);
+        const (_, allocTime, indexTime, accessTime) =
+          localProcess(basisPtr,
+                       accessorPtr,
+                       basisStatesPtr + k,
+                       coeffsPtr + k,
+                       n);
         localProcessTimer.stop();
+        localProcessAllocating += allocTime;
+        localProcessIndexing += indexTime;
+        localProcessAccessing += accessTime;
 
         submitted[destLocaleIdx] = true;
         remaining -= 1;
@@ -654,6 +658,8 @@ record Producer {
   }
 }
 
+config const kShuffle : bool = false;
+
 record Consumer {
   type eltType;
 
@@ -673,6 +679,9 @@ record Consumer {
 
   var runTimer : Timer;
   var localProcessTimer : Timer;
+  var localProcessAllocating : real;
+  var localProcessIndexing : real;
+  var localProcessAccessing : real;
   var fastOnTimer : Timer;
 
   proc init(taskIdx : int, numConsumerTasks : int, numProducerTasks : int,
@@ -702,6 +711,9 @@ record Consumer {
           offset += 1;
         }
       }
+      if kShuffle then
+        Random.shuffle(pairs);
+
       this.slots = pairs;
       // logDebug("Slots: ", slots);
     }
@@ -728,47 +740,36 @@ record Consumer {
   }
 
   proc run() {
-    // logDebug("numProcessed = ", numProcessedPtr.deref().read(),
-    //          ", totalNumberChunks = ", totalNumberChunks);
     runTimer.start();
     while numProcessedPtr.deref().read() < totalNumberChunks {
       var hasDoneWork = false;
       for (localeIdx, otherTaskIdx) in slots {
-      // for localeIdx in 0 ..# numLocales {
-      //   for otherTaskIdx in 0 ..# numProducerTasks {
-          ref localBuffer = localBuffers[localeIdx, otherTaskIdx];
-          if !localBuffer.isEmpty.read() {
-            // logDebug("Calling localProcess in Consumer(", _taskIdx, ")...");
-            local {
-              localProcessTimer.start();
-              numProcessedPtr.deref().add(1);
+        ref localBuffer = localBuffers[localeIdx, otherTaskIdx];
+        if !localBuffer.isEmpty.read() {
+          local {
+            localProcessTimer.start();
+            numProcessedPtr.deref().add(1);
+            const (_, allocTime, indexTime, accessTime) =
               localProcess(basisPtr, accessorPtr,
                            localBuffer.basisStates,
                            localBuffer.coeffs,
                            localBuffer.size);
-              localBuffer.isEmpty.write(true);
-              localProcessTimer.stop();
-            }
-            const atomicPtr = localBuffer.isFull;
-
-
-            // logDebug("Calling on Locales[...] in Consumer(", _taskIdx, ")...");
-            fastOnTimer.start();
-            on Locales[localBuffer.srcLocaleIdx] {
-              atomicStoreBool(atomicPtr, false);
-            }
-            fastOnTimer.stop();
-
-            hasDoneWork = true;
-            // chpl_task_yield();
-
-            // logDebug("Done with localProcess in Consumer(", _taskIdx, ")...");
+            localBuffer.isEmpty.write(true);
+            localProcessTimer.stop();
+            localProcessAllocating += allocTime;
+            localProcessIndexing += indexTime;
+            localProcessAccessing += accessTime;
           }
-      //  }
-      }
+          const atomicPtr = localBuffer.isFull;
 
-      if kDeadlock {
-        if !hasDoneWork then chpl_task_yield();
+          fastOnTimer.start();
+          on Locales[localBuffer.srcLocaleIdx] {
+            atomicStoreBool(atomicPtr, false);
+          }
+          fastOnTimer.stop();
+
+          hasDoneWork = true;
+        }
       }
     }
     runTimer.stop();
@@ -778,9 +779,10 @@ record Consumer {
 
 private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                                      const ref representatives : [] uint(64)) {
-  var timers = new LocalOffDiagonalTimers();
-  timers.total.start();
-  timers.initialization.start();
+  var totalTimer = new Timer();
+  var initializationTimer = new Timer();
+  totalTimer.start();
+  initializationTimer.start();
 
   const numTasks = kNumTasks;
   // If there is only one locale, there's no need to process tasks from other locales :)
@@ -834,13 +836,18 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
            ", representatives.size = ", representatives.size,
            ", numberOffDiagTerms = ", matrix.numberOffDiagTerms());
 
-  allLocalesBarrier.barrier();
-  timers.initialization.stop();
-
   var producerRunTime : [0 ..# numProducerTasks] real;
   var producerComputeOffDiagTime : [0 ..# numProducerTasks] real;
+  var producerApplyOffDiagTime : [0 ..# numProducerTasks] real;
+  var producerMemcpyTime : [0 ..# numProducerTasks] real;
+  var producerStateInfoTime : [0 ..# numProducerTasks] real;
+  var producerCoeffTime : [0 ..# numProducerTasks] real;
+  var producerKeysTime : [0 ..# numProducerTasks] real;
   var producerRadixOneStepTime : [0 ..# numProducerTasks] real;
   var producerLocalProcessTime : [0 ..# numProducerTasks] real;
+  var producerAllocTime : [0 ..# numProducerTasks] real;
+  var producerIndexTime : [0 ..# numProducerTasks] real;
+  var producerAccessTime : [0 ..# numProducerTasks] real;
   var producerSubmitTime : [0 ..# numProducerTasks] real;
   var producerFastOnTime : [0 ..# numProducerTasks] real;
   var producerPutTime : [0 ..# numProducerTasks] real;
@@ -848,9 +855,15 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
 
   var consumerRunTime : [0 ..# numConsumerTasks] real;
   var consumerLocalProcessTime : [0 ..# numConsumerTasks] real;
+  var consumerAllocTime : [0 ..# numConsumerTasks] real;
+  var consumerIndexTime : [0 ..# numConsumerTasks] real;
+  var consumerAccessTime : [0 ..# numConsumerTasks] real;
   var consumerFastOnTime : [0 ..# numConsumerTasks] real;
 
-  coforall taskIdx in 0 ..# numTasks with (ref timers, ref accessor) {
+  allLocalesBarrier.barrier();
+  initializationTimer.stop();
+
+  coforall taskIdx in 0 ..# numTasks with (ref accessor) {
     if taskIdx < numProducerTasks {
       // I'm a producer
       var producer = new Producer(
@@ -868,8 +881,16 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
 
       producerRunTime[taskIdx] = producer.runTimer.elapsed();
       producerComputeOffDiagTime[taskIdx] = producer.computeOffDiagTimer.elapsed();
+      producerApplyOffDiagTime[taskIdx] = producer.batchedOperator.applyOffDiagTimer.elapsed();
+      producerMemcpyTime[taskIdx] = producer.batchedOperator.memcpyTimer.elapsed();
+      producerStateInfoTime[taskIdx] = producer.batchedOperator.stateInfoTimer.elapsed();
+      producerCoeffTime[taskIdx] = producer.batchedOperator.coeffTimer.elapsed();
+      producerKeysTime[taskIdx] = producer.batchedOperator.keysTimer.elapsed();
       producerRadixOneStepTime[taskIdx] = producer.radixOneStepTimer.elapsed();
       producerLocalProcessTime[taskIdx] = producer.localProcessTimer.elapsed();
+      producerAllocTime[taskIdx] = producer.localProcessAllocating;
+      producerIndexTime[taskIdx] = producer.localProcessIndexing;
+      producerAccessTime[taskIdx] = producer.localProcessAccessing;
       producerSubmitTime[taskIdx] = producer.submitTimer.elapsed();
       producerFastOnTime[taskIdx] = producer.fastOnTimer.elapsed();
       producerPutTime[taskIdx] = producer.putTimer.elapsed();
@@ -891,6 +912,9 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
       const i = taskIdx - numProducerTasks;
       consumerRunTime[i] = consumer.runTimer.elapsed();
       consumerLocalProcessTime[i] = consumer.localProcessTimer.elapsed();
+      consumerAllocTime[i] = consumer.localProcessAllocating;
+      consumerIndexTime[i] = consumer.localProcessIndexing;
+      consumerAccessTime[i] = consumer.localProcessAccessing;
       consumerFastOnTime[i] = consumer.fastOnTimer.elapsed();
     }
   }
@@ -909,23 +933,30 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
     }
   }
 
-  timers.put = + reduce newRemoteBuffers._putTime;
-  timers.wait = + reduce newRemoteBuffers._waitTime;
-  timers.submit = + reduce newRemoteBuffers._submitTime;
-
-  timers.total.stop();
+  totalTimer.stop();
   if kDisplayTimings then
-    logDebug("localOffDiagonalNoQueue: ", timers.total.elapsed(), "\n",
-             "  ├─ ", timers.initialization.elapsed(), " in initialization\n",
+    logDebug("localOffDiagonalNoQueue: ", totalTimer.elapsed(), "\n",
+             "  ├─ ", initializationTimer.elapsed(), " in initialization\n",
              "  ├─ producers: ", producerRunTime, "\n",
              "  │   ├─ computeOffDiag: ", producerComputeOffDiagTime, "\n",
+             "  │   │   ├─ applyOffDiag: ", producerApplyOffDiagTime, "\n",
+             "  │   │   ├─ memcpy:   ", producerMemcpyTime, "\n",
+             "  │   │   ├─ stateInfo:   ", producerStateInfoTime, "\n",
+             "  │   │   ├─ rescale:   ", producerCoeffTime, "\n",
+             "  │   │   └─ localeIdxOf:   ", producerKeysTime, "\n",
              "  │   ├─ radixOneStep:   ", producerRadixOneStepTime, "\n",
              "  │   ├─ localProcess:   ", producerLocalProcessTime, "\n",
+             "  │   │   ├─ allocating: ", producerAllocTime, "\n",
+             "  │   │   ├─ indexing:   ", producerIndexTime, "\n",
+             "  │   │   └─ accessing:  ", producerAccessTime, "\n",
              "  │   └─ submit:         ", producerSubmitTime, "\n",
              "  │       ├─ PUT:    ", producerPutTime, "\n",
              "  │       └─ fastOn: ", producerFastOnTime, "\n",
              "  └─ consumers: ", consumerRunTime, "\n",
              "      ├─ localProcess: ", consumerLocalProcessTime, "\n",
+             "      │   ├─ allocating: ", consumerAllocTime, "\n",
+             "      │   ├─ indexing:   ", consumerIndexTime, "\n",
+             "      │   └─ accessing:  ", consumerAccessTime, "\n",
              "      └─ fastOn:       ", consumerFastOnTime, "\n",
              "     (bandwidth in GB/s: ", producerBandwidth, ")");
 }

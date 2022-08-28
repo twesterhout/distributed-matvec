@@ -49,8 +49,12 @@ record BatchedOperator {
   var _norms : [_dom] real(64);
   var _localeIdxs : [_dom] uint(8);
   var _offsets : [0 ..# batchSize + 1] int;
-  var offDiagTime : real;
-  var compressTime : real;
+
+  var applyOffDiagTimer : Timer;
+  var stateInfoTimer : Timer;
+  var memcpyTimer : Timer;
+  var coeffTimer : Timer;
+  var keysTimer : Timer;
 
   proc init(const ref matrix : Operator, batchSize : int) {
     this._matrixPtr = c_const_ptrTo(matrix);
@@ -91,8 +95,7 @@ record BatchedOperator {
       // at this point j ∈ {0 ..# _numberOffDiagTerms}. Both cᵢⱼ and |βᵢⱼ⟩ are
       // conceptually 2-dimensional arrays, but we use flattened
       // representations of them.
-      var timer = new Timer();
-      timer.start();
+      applyOffDiagTimer.start();
       ls_internal_operator_apply_off_diag_x1(
         matrix.payload,
         count,
@@ -101,13 +104,14 @@ record BatchedOperator {
         cs,
         offsets,
         xs);
-      timer.stop();
-      offDiagTime += timer.elapsed();
+      applyOffDiagTimer.stop();
 
+      keysTimer.start();
       const totalCount = offsets[count];
       foreach i in 0 ..# totalCount {
         keys[i] = localeIdxOf(betas[i]):uint(8);
       }
+      keysTimer.stop();
       return (totalCount, betas, cs, keys);
     }
 
@@ -115,6 +119,7 @@ record BatchedOperator {
     const tempSpins = c_pointer_return(_spins2[0]);
     const tempCoeffs = c_pointer_return(_coeffs2[0]);
     const offsets = c_pointer_return(_offsets[0]);
+    applyOffDiagTimer.start();
     ls_internal_operator_apply_off_diag_x1(
       matrix.payload,
       count,
@@ -123,14 +128,18 @@ record BatchedOperator {
       tempCoeffs,
       offsets,
       xs);
+    applyOffDiagTimer.stop();
     const totalCount = offsets[count];
     // We are also interested in norms of alphas, so we append them to tempSpins
+    memcpyTimer.start();
     assert(totalCount + count <= _dom.size);
     c_memcpy(tempSpins + totalCount, alphas, count:c_size_t * c_sizeof(uint(64)));
+    memcpyTimer.stop();
 
     const betas = c_pointer_return(_spins1[0]);
     const cs = c_pointer_return(_coeffs1[0]);
     const norms = c_pointer_return(_norms[0]);
+    stateInfoTimer.start();
     ls_hs_state_info(
       basis.payload,
       totalCount + count,
@@ -138,16 +147,22 @@ record BatchedOperator {
       betas, 1,
       cs,
       norms);
+    stateInfoTimer.stop();
+
+    coeffTimer.start();
     foreach i in 0 ..# count {
       foreach k in offsets[i] ..< offsets[i + 1] {
         cs[k] *= tempCoeffs[k] * norms[k] / norms[totalCount + i];
       }
     }
+    coeffTimer.stop();
 
+    keysTimer.start();
     const keys = c_pointer_return(_localeIdxs[0]);
     foreach i in 0 ..# totalCount {
       keys[i] = localeIdxOf(betas[i]):uint(8);
     }
+    keysTimer.stop();
 
     return (totalCount, betas, cs, keys);
   }
