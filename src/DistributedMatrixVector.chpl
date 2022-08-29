@@ -20,6 +20,17 @@ config const kVerboseComm : bool = false;
 config const kVerboseGetTiming : bool = false; 
 config const kUseQueue : bool = true;
 
+
+private proc meanAndErrString(timings : [] real) {
+  const mean = (+ reduce timings) / timings.size:real;
+  const variance =
+    (1.0 / timings.size:real)
+      * (+ reduce ([i in timings.domain]
+                     (timings[i] - mean) * (timings[i] - mean)));
+  const err = round(100 * sqrt(variance)) / 100;
+  return mean:string + " ± " + err:string;
+}
+
 /* 
  */
 private proc localDiagonalBatch(indices : range(int, BoundedRangeType.bounded, false),
@@ -936,29 +947,29 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
   totalTimer.stop();
   if kDisplayTimings then
     logDebug("localOffDiagonalNoQueue: ", totalTimer.elapsed(), "\n",
-             "  ├─ ", initializationTimer.elapsed(), " in initialization\n",
-             "  ├─ producers: ", producerRunTime, "\n",
-             "  │   ├─ computeOffDiag: ", producerComputeOffDiagTime, "\n",
-             "  │   │   ├─ applyOffDiag: ", producerApplyOffDiagTime, "\n",
-             "  │   │   ├─ memcpy:   ", producerMemcpyTime, "\n",
-             "  │   │   ├─ stateInfo:   ", producerStateInfoTime, "\n",
-             "  │   │   ├─ rescale:   ", producerCoeffTime, "\n",
-             "  │   │   └─ localeIdxOf:   ", producerKeysTime, "\n",
-             "  │   ├─ radixOneStep:   ", producerRadixOneStepTime, "\n",
-             "  │   ├─ localProcess:   ", producerLocalProcessTime, "\n",
-             "  │   │   ├─ allocating: ", producerAllocTime, "\n",
-             "  │   │   ├─ indexing:   ", producerIndexTime, "\n",
-             "  │   │   └─ accessing:  ", producerAccessTime, "\n",
-             "  │   └─ submit:         ", producerSubmitTime, "\n",
-             "  │       ├─ PUT:    ", producerPutTime, "\n",
-             "  │       └─ fastOn: ", producerFastOnTime, "\n",
-             "  └─ consumers: ", consumerRunTime, "\n",
-             "      ├─ localProcess: ", consumerLocalProcessTime, "\n",
-             "      │   ├─ allocating: ", consumerAllocTime, "\n",
-             "      │   ├─ indexing:   ", consumerIndexTime, "\n",
-             "      │   └─ accessing:  ", consumerAccessTime, "\n",
-             "      └─ fastOn:       ", consumerFastOnTime, "\n",
-             "     (bandwidth in GB/s: ", producerBandwidth, ")");
+             " ├─ ", initializationTimer.elapsed(), " in initialization\n",
+             " ├─ producers: ", meanAndErrString(producerRunTime), "\n",
+             " │   ├─ computeOffDiag: ", meanAndErrString(producerComputeOffDiagTime), "\n",
+             " │   │   ├─ applyOffDiag: ", meanAndErrString(producerApplyOffDiagTime), "\n",
+             " │   │   ├─ memcpy:       ", meanAndErrString(producerMemcpyTime), "\n",
+             " │   │   ├─ stateInfo:    ", meanAndErrString(producerStateInfoTime), "\n",
+             " │   │   ├─ rescale:      ", meanAndErrString(producerCoeffTime), "\n",
+             " │   │   └─ localeIdxOf:  ", meanAndErrString(producerKeysTime), "\n",
+             " │   ├─ radixOneStep:   ", meanAndErrString(producerRadixOneStepTime), "\n",
+             " │   ├─ localProcess:   ", meanAndErrString(producerLocalProcessTime), "\n",
+             " │   │   ├─ allocating: ", meanAndErrString(producerAllocTime), "\n",
+             " │   │   ├─ indexing:   ", meanAndErrString(producerIndexTime), "\n",
+             " │   │   └─ accessing:  ", meanAndErrString(producerAccessTime), "\n",
+             " │   └─ submit:         ", meanAndErrString(producerSubmitTime), "\n",
+             " │       ├─ PUT:    ", meanAndErrString(producerPutTime), "\n",
+             " │       └─ fastOn: ", meanAndErrString(producerFastOnTime), "\n",
+             " └─ consumers: ", meanAndErrString(consumerRunTime), "\n",
+             "     ├─ localProcess: ", meanAndErrString(consumerLocalProcessTime), "\n",
+             "     │   ├─ allocating: ", meanAndErrString(consumerAllocTime), "\n",
+             "     │   ├─ indexing:   ", meanAndErrString(consumerIndexTime), "\n",
+             "     │   └─ accessing:  ", meanAndErrString(consumerAccessTime), "\n",
+             "     └─ fastOn:       ", meanAndErrString(consumerFastOnTime), "\n",
+             "    (bandwidth in GB/s: ", meanAndErrString(producerBandwidth), ")");
 }
 
 private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,

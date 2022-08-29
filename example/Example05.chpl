@@ -93,6 +93,9 @@ proc main() {
   // On cn20 for 36 sites with symmetries:
   //   30.25096321105957 spent building the basis using OpenMP
   //   38.897812843322754 spent in matrix-vector using OpenMP
+  // On cn20 for 40 spins with symmetries:
+  //   464.6610436439514 spent building the basis using OpenMP
+  //   682.9306001663208 spent in matrix-vector using OpenMP
   matrixVectorProduct(kHamiltonian, x, z, basisStates);
 
   const zBlock = arrFromHashedToBlock(z, masks);
