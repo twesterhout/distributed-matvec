@@ -58,18 +58,26 @@ def main():
     generate(
         "data/old/heisenberg_chain_24_symm.yaml",
         "data/matvec/heisenberg_chain_24_symm.h5",
+        skip=True
     )
     generate(
         "data/old/heisenberg_chain_32_symm.yaml",
         "data/matvec/heisenberg_chain_32_symm.h5",
+        skip=True
     )
     generate(
         "data/old/heisenberg_chain_36_symm.yaml",
         "data/large-scale/matvec/heisenberg_chain_36_symm.h5",
+        skip=True
+    )
+    generate(
+        "data/old/heisenberg_chain_40_symm.yaml",
+        "data/large-scale/matvec/heisenberg_chain_40_symm.h5",
     )
     generate(
         "data/old/heisenberg_kagome_12_symm.yaml",
         "data/matvec/heisenberg_kagome_12_symm.h5",
+        skip=True
     )
 
 
