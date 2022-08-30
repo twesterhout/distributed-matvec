@@ -11,7 +11,7 @@ LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries_c
 # endif
 
 PRIMME_CFLAGS = -I/home/tom/src/primme/include
-PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -lopenblas -lm -lgomp -lpthread
+PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -llapacke -lopenblas -lm -lgomp -lpthread
 
 # MODULES = src/ApplyOperator.chpl src/StatesEnumeration.chpl src/helper.c
 MODULES = src/LatticeSymmetries.chpl \
@@ -129,6 +129,10 @@ bin/Example05: example/Example05.chpl $(MODULES)
 bin/dummy: src/dummy.chpl
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ $<
+
+bin/primme: src/PRIMME.chpl
+	@mkdir -p $(@D)
+	chpl $(CFLAGS) $(PRIMME_CFLAGS) -o $@ $< $(PRIMME_LDFLAGS)
 
 
 # Dummy file we use to reproduce internal compiler errors in Chapel for
