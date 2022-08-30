@@ -1,5 +1,6 @@
 module StatesEnumeration {
 
+use CommonParameters;
 use FFI;
 use ForeignTypes;
 use Vector;
@@ -18,21 +19,13 @@ use CommDiagnostics;
 use Time;
 use Memory.Initialization;
 
-config const isRepresentativeBatchSize : int = 65536;
-config const enumerateStatesNumChunks : int = 2 * numLocales * here.maxTaskPar;
+config const isRepresentativeBatchSize : int = 131072;
+config const enumerateStatesNumChunks : int = 20 * numLocales * here.maxTaskPar;
 config const statesFromHashedToBlockNumChunks = 2 * here.maxTaskPar;
 config const statesFromBlockToHashedNumChunks = 2 * numLocales * here.maxTaskPar;
 config const kUseLowLevelComm : bool = true;
 // config const numChunksPerLocale = 3;
 config const enableSegFault : bool = false;
-
-inline proc GET(addr, node, rAddr, size) {
-  __primitive("chpl_comm_get", addr, node, rAddr, size);
-}
-
-inline proc PUT(addr, node, rAddr, size) {
-  __primitive("chpl_comm_put", addr, node, rAddr, size);
-}
 
 /* Get the next integer with the same Hamming weight.
 
@@ -90,37 +83,17 @@ private proc manyNextState(v: uint(64), bound: uint(64), ref buffer: [] uint(64)
   return offset;
 }
 
-
-/*
-private inline iter findStatesInRange(in lower: uint(64), upper: uint(64),
-                                      isHammingWeightFixed : bool,
-                                      const ref basis : Basis) {
-  if lower > upper then
-    return;
-  var buffer: [0 ..# isRepresentativeBatchSize] uint(64) = noinit;
-  var flags: [0 ..# isRepresentativeBatchSize] uint(8) = noinit;
-  var norms: [0 ..# isRepresentativeBatchSize] real(64) = noinit;
-  while (true) {
-    const written = manyNextState(lower, upper, buffer, isHammingWeightFixed);
-    isRepresentative(basis, buffer[0 ..# written], flags[0 ..# written], norms[0 ..# written]);
-    for i in 0 ..# written {
-      if (flags[i]:bool && norms[i] > 0) { yield buffer[i]; }
-    }
-    if (buffer[written - 1] == upper) { break; }
-
-    if isHammingWeightFixed { lower = nextState(buffer[written - 1], true); }
-    else { lower = nextState(buffer[written - 1], false); }
-  }
+private inline proc unprojectedStateToIndex(basisState : uint(64),
+                                            isHammingWeightFixed : bool) : int {
+  return if isHammingWeightFixed
+           then ls_hs_fixed_hamming_state_to_index(basisState)
+           else basisState:int;
 }
-*/
-
-private inline proc unprojectedStateToIndex(basisState : uint(64), isHammingWeightFixed : bool) : int {
-  return if isHammingWeightFixed then ls_hs_fixed_hamming_state_to_index(basisState)
-                                 else basisState:int;
-}
-private inline proc unprojectedIndexToState(stateIndex : int, hammingWeight : int) : uint(64) {
-  return if hammingWeight != -1 then ls_hs_fixed_hamming_index_to_state(stateIndex, hammingWeight:c_int)
-                                else stateIndex:uint(64);
+private inline proc unprojectedIndexToState(stateIndex : int,
+                                            hammingWeight : int) : uint(64) {
+  return if hammingWeight != -1
+           then ls_hs_fixed_hamming_index_to_state(stateIndex, hammingWeight:c_int)
+           else stateIndex:uint(64);
 }
 
 /* We want to split `r` into `numChunks` non-overlapping ranges but such that for each range
@@ -129,8 +102,6 @@ private inline proc unprojectedIndexToState(stateIndex : int, hammingWeight : in
  */
 proc determineEnumerationRanges(r : range(uint(64)), in numChunks : int,
                                 isHammingWeightFixed : bool) {
-  var timer = new Timer();
-  timer.start();
   const hammingWeight = if isHammingWeightFixed then popcount(r.low):int else -1;
   const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
   const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
@@ -138,14 +109,10 @@ proc determineEnumerationRanges(r : range(uint(64)), in numChunks : int,
   if numChunks > totalSize then
     numChunks = totalSize;
   var ranges : [0 ..# numChunks] range(uint(64));
-  // var ranges = newCyclicArr({0 ..# numChunks}, range(uint(64)));
   for (r, i) in zip(chunks(lowIdx .. highIdx, numChunks), 0..) {
     ranges[i] = unprojectedIndexToState(r.low, hammingWeight)
                   .. unprojectedIndexToState(r.high, hammingWeight);
   }
-  timer.stop();
-  // logDebug("determineEnumerationRanges(", r, ", ", numChunks, ", ", isHammingWeightFixed,
-  //          ") took ", timer.elapsed());
   return ranges;
 }
 
@@ -177,10 +144,16 @@ private proc _enumStatesComputeMasksAndCounts(const ref states, ref outMasks) {
   var counts : [0 ..# numLocales] int;
 
   outMasks.resize(totalCount);
-  foreach i in 0 ..# totalCount {
-    const key = localeIdxOf(states[i]);
-    outMasks[i] = key:uint(8);
-    counts[key] += 1;
+  if numLocales == 1 { // all data belongs to locale 0
+    c_memset(outMasks.data, 0, totalCount:c_size_t * c_sizeof(outMasks.eltType));
+    counts[0] = totalCount;
+  }
+  else {
+    foreach i in 0 ..# totalCount {
+      const key = localeIdxOf(states[i]);
+      outMasks[i] = key:uint(8);
+      counts[key] += 1;
+    }
   }
   return counts;
 }
@@ -222,7 +195,6 @@ private proc _enumerateStatesUnprojected(r : range(uint(64)), const ref basis : 
   const totalCount = highIdx - lowIdx + 1;
   outStates.resize(totalCount);
   manyNextState(r.low, r.high, outStates._arr, isHammingWeightFixed);
-  // return _enumStatesComputeMasksAndCounts(outStates, outMasks);
 }
 private proc _enumerateStatesUnprojectedSpinfulFermion(r : range(uint(64)),
                                                        const ref basis : Basis,
@@ -255,6 +227,7 @@ private proc _enumerateStatesUnprojectedSpinfulFermion(r : range(uint(64)),
     }
   }
 }
+
 private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis,
                               ref outStates : Vector(uint(64))) {
   if basis.requiresProjection() then
@@ -264,133 +237,6 @@ private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis,
   else
     _enumerateStatesUnprojectedSpinfulFermion(r, basis, outStates);
 }
-
-/*
-private proc _enumerateStatesUnprojected(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
-  const isHammingWeightFixed = basis.isHammingWeightFixed();
-  if isHammingWeightFixed && popcount(r.low) != popcount(r.high) then
-    halt("r.low=" + r.low:string + " and r.high=" + r.high:string
-        + " have different Hamming weight: " + popcount(r.low):string
-        + " vs. " + popcount(r.high):string);
-  const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
-  const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
-  const totalCount = highIdx - lowIdx + 1;
-
-  const estimatedCountPerLocale = totalCount / numLocales;
-  foreach i in LocaleSpace do
-    outVectors[i].reserve(estimatedCountPerLocale);
-
-  var v = r.low;
-  for i in 0 ..# totalCount {
-    const localeIdx = localeIdxOf(v);
-    outVectors[localeIdx].pushBack(v);
-    v = if isHammingWeightFixed
-          then nextStateFixedHamming(v)
-          else nextStateGeneral(v);
-  }
-}
-*/
-/*
-private proc _enumerateStatesSpinfulFermion(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
-  assert(basis.isSpinfulFermionicBasis());
-  const numberSites = basis.numberSites();
-  const mask = (1 << numberSites) - 1; // isolate the lower numberSites bits
-  const numberUp = basis.numberUp();
-  const numberDown = basis.numberParticles() - numberUp;
-  const countA =
-    unprojectedStateToIndex(r.high & mask, isHammingWeightFixed=true) -
-      unprojectedStateToIndex(r.low & mask, isHammingWeightFixed=true) + 1;
-  const countB =
-    unprojectedStateToIndex((r.high >> numberSites) & mask, isHammingWeightFixed=true) -
-      unprojectedStateToIndex((r.low >> numberSites) & mask, isHammingWeightFixed=true) + 1;
-  const estimatedCountPerLocale = countA * countB / numLocales;
-  foreach i in LocaleSpace do
-    outVectors[i].reserve(estimatedCountPerLocale);
-
-  var vB = (r.low >> numberSites) & mask;
-  for _iB in 0 ..# countB {
-    var vA = r.low & mask;
-    for _iA in 0 ..# countA {
-      const v = (vB << numberSites) | vA;
-      const localeIdx = localeIdxOf(v);
-      outVectors[localeIdx].pushBack(v);
-
-      vA = nextStateFixedHamming(vA);
-    }
-    vB = nextStateFixedHamming(vB);
-  }
-}
-*/
-/*
-private proc _enumerateStatesProjected(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
-  const isHammingWeightFixed = basis.isHammingWeightFixed();
-  for v in findStatesInRange(r.low, r.high, isHammingWeightFixed, basis) {
-    const localeIdx = localeIdxOf(v);
-    outVectors[localeIdx].pushBack(v);
-  }
-}
-*/
-/*
-private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis, ref outVectors) {
-  // logDebug("_enumerateStates");
-  if basis.requiresProjection() {
-    _enumerateStatesProjected(r, basis, outVectors);
-  }
-  else if basis.isStateIndexIdentity() || basis.isHammingWeightFixed() {
-    _enumerateStatesUnprojected(r, basis, outVectors);
-  }
-  else {
-    _enumerateStatesSpinfulFermion(r, basis, outVectors);
-  }
-}
-*/
-
-/*
-proc _emptyVectors(type t)
-  // : [LocaleSpace] Vector(t)
-  { return [loc in LocaleSpace] new Vector(t); }
-
-
-proc enumerateStates(const ref basis : Basis, in numChunks : int, globalRange : range(uint(64))) {
-  const isHammingWeightFixed = basis.isHammingWeightFixed();
-  const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
-  assert(ranges.size <= numChunks);
-  numChunks = ranges.size; // We could have fewer elements in the range than numChunks.
-                           // In such case, we limit numChunks
-
-  const D = {0 ..# numChunks} dmapped Cyclic(startIdx=0);
-  var buckets: [D] [LocaleSpace] Vector(uint(64)) = [d in D] _emptyVectors(uint(64));
-  // noinit;
-  // new Vector(uint(64));
-
-  startVerboseComm();
-  forall i in D {
-    // (r, i) in zip(ranges, 0..) {
-    const r = ranges[i];
-    assert(here == buckets[i].locale);
-    const localBasis = basis;
-    _enumerateStates(r, localBasis, buckets[i]);
-  }
-  stopVerboseComm();
-
-  const OnePerLocale = LocaleSpace dmapped Block(LocaleSpace);
-  var representatives : [OnePerLocale] Vector(uint(64)) =
-    [loc in OnePerLocale] new Vector(uint(64));
-  forall (vector, localeIdx) in zip(representatives, LocaleSpace) {
-    vector.reserve(+ reduce [bucket in buckets] bucket[localeIdx].size);
-    for bucket in buckets {
-      const ref v = bucket[localeIdx];
-      vector.append(v);
-    }
-  }
-  return new BlockVector(representatives);
-}
-proc enumerateStates(const ref basis : Basis, numChunks : int = enumerateStatesNumChunks) {
-  const lower = basis.minStateEstimate();
-  const upper = basis.maxStateEstimate();
-  return enumerateStates(basis, numChunks, lower .. upper);
-}
-*/
 
 proc prefixSum(arr : [] ?eltType) {
   var sums : [0 ..# arr.size] eltType;
@@ -439,28 +285,42 @@ inline proc _enumStatesMakeBuckets(numChunks : int) {
 proc _enumStatesComputeCounts(ref buckets,
                               const ref ranges : [] range(uint(64)),
                               const ref basis : Basis) {
-  // assert(!basis.requiresProjection());
-  assert(basis.isStateIndexIdentity() || basis.isHammingWeightFixed());
   assert(here.id == 0);
 
   const numChunks = ranges.size;
   var counts : [0 ..# numChunks, 0 ..# numLocales] int;
   const countsPtr = c_ptrTo(counts[0, 0]);
 
-  // if kVerboseComm then startVerboseComm();
-  // var countsTimer = new Timer();
-  // countsTimer.start();
   const serializedBasis : string = basis.toJSON();
   coforall loc in Locales do on loc {
+    var outerTimer = new Timer();
+    outerTimer.start();
+
     const myBasis = new Basis(serializedBasis.localize());
     const myRanges : [0 ..# numChunks] range(uint(64)) = ranges;
     const mySubdomain = buckets.localSubdomain();
 
-    forall chunkIdx in mySubdomain {
+    var enumerateStatesTime : atomic real = 0;
+    var computeMasksAndCountsTime : atomic real = 0;
+    var putsTime : atomic real = 0;
+
+    forall chunkIdx in dynamic(mySubdomain, chunkSize=1) {
       ref (outStates, outMasks) = buckets.localAccess(chunkIdx);
+      var timer = new Timer();
+      timer.start();
       // This is the actual computation!
       _enumerateStates(myRanges[chunkIdx], myBasis, outStates);
+      timer.stop();
+      enumerateStatesTime.add(timer.elapsed(), memoryOrder.relaxed);
+
+      timer.clear();
+      timer.start();
       const myCounts = _enumStatesComputeMasksAndCounts(outStates, outMasks);
+      timer.stop();
+      computeMasksAndCountsTime.add(timer.elapsed(), memoryOrder.relaxed);
+
+      timer.clear();
+      timer.start();
       // const myCounts = _enumerateStatesUnprojectedNew(myRanges[chunkIdx], myBasis,
       //                                                 outStates, outMasks);
       // Copy computed chunks back to locale 0. We use low-level PUT, because
@@ -469,10 +329,22 @@ proc _enumStatesComputeCounts(ref buckets,
       const destPtr = countsPtr + chunkIdx * numLocales;
       const destSize = numLocales:c_size_t * c_sizeof(int);
       PUT(myCountsPtr, 0, destPtr, destSize);
+
+      timer.stop();
+      putsTime.add(timer.elapsed(), memoryOrder.relaxed);
     }
+
+    outerTimer.stop();
+    if kDisplayTimings then
+      logDebug("_enumStatesComputeCounts: ", outerTimer.elapsed(), "\n",
+               "  ├─ ", enumerateStatesTime, " in _enumerateStates\n",
+               "  ├─ ", computeMasksAndCountsTime, " in _enumStatesComputeMasksAndCounts\n",
+               "  └─ ", putsTime, " in PUT\n",
+               "     (parallel speedup: ",
+                        (enumerateStatesTime.read() + computeMasksAndCountsTime.read()
+                          + putsTime.read()) / outerTimer.elapsed(),
+                     ")");
   }
-  // countsTimer.stop();
-  // if kVerboseComm then stopVerboseComm();
 
   return counts;
 }
@@ -659,17 +531,22 @@ proc enumerateStates(ranges : [] range(uint(64)), const ref basis : Basis, out _
     _enumStatesDistribute(buckets, masks, counts, offsets, basisStatesPtrs, masksDescriptors);
 
   timer.stop();
-  logDebug("enumerateStatesNew took ", timer.elapsed(), "\n",
-           "  ├─ ", countsTimer.elapsed(), " were spent computing counts\n",
-           "  └─ ", distributeTime, " shuffling stuff around\n",
-           "      ├─ ", copyTimes, " copying states\n",
-           "      └─ ", maskCopyTimes, " copying masks");
+  if kDisplayTimings then
+    logDebug("enumerateStates: ", timer.elapsed(), "\n",
+             "  ├─ ", countsTimer.elapsed(), " in _enumStatesComputeCounts\n",
+             "  └─ ", distributeTime, " shuffling stuff around\n",
+             "      ├─ ", copyTimes, " copying states\n",
+             "      └─ ", maskCopyTimes, " copying masks");
   _masks = masks;
   return basisStates;
 }
 proc enumerateStates(globalRange : range(uint(64)), const ref basis : Basis,
-                     out masks, numChunks : int = enumerateStatesNumChunks) {
+                     out masks, in numChunks : int = enumerateStatesNumChunks) {
   const isHammingWeightFixed = basis.isHammingWeightFixed();
+  // If we don't have to project, the enumeration ranges can be split equally,
+  // so there's no need to use more chunks than there are cores
+  if !basis.requiresProjection() then
+    numChunks = numLocales * here.maxTaskPar;
   const ranges = determineEnumerationRanges(globalRange, numChunks, isHammingWeightFixed);
   return enumerateStates(ranges, basis, masks);
 }

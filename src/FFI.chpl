@@ -19,6 +19,14 @@ module FFI {
     return c_pointer_return(x);
   }
 
+  inline proc GET(addr, node, rAddr, size) {
+    __primitive("chpl_comm_get", addr, node, rAddr, size);
+  }
+
+  inline proc PUT(addr, node, rAddr, size) {
+    __primitive("chpl_comm_put", addr, node, rAddr, size);
+  }
+
   proc unsafeViewAsExternalArray(const ref arr: []): chpl_external_array {
     if !isIntegralType(arr.domain.idxType) {
       // Probably not reachable any more, but may become reachable again
@@ -168,6 +176,8 @@ module FFI {
   extern proc ls_hs_operator_plus(a : c_ptr(ls_hs_operator), b : c_ptr(ls_hs_operator)) : c_ptr(ls_hs_operator);
   extern proc ls_hs_print_terms(op : c_ptr(ls_hs_operator));
   extern proc ls_hs_destroy_operator_v2(op : c_ptr(ls_hs_operator));
+
+  extern proc ls_hs_operator_max_number_off_diag(op : c_ptr(ls_hs_operator)) : c_int;
 
   extern proc ls_hs_load_hamiltonian_from_yaml(filename : c_string) : c_ptr(ls_hs_operator);
 

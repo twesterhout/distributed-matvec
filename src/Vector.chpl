@@ -80,6 +80,8 @@ record Vector {
       _dom = {0 ..# _size};
   }
 
+  inline proc data : c_ptr(eltType) { return c_ptrTo(_arr[_dom.low]); }
+
   pragma "reference to const when const this"
   pragma "fn returns aliasing array"
   proc toArray() {
