@@ -18,7 +18,7 @@ use CommunicationQueue;
 
 config const kVerboseComm : bool = false; 
 config const kVerboseGetTiming : bool = false; 
-config const kUseQueue : bool = true;
+config const kUseQueue : bool = false;
 
 
 private proc meanAndErrString(timings : [] real) {
@@ -379,13 +379,20 @@ record _RemoteBuffer {
 
 
 
+class GlobalPtrStore {
+  var arr : [LocaleSpace] (c_ptr(Basis),
+                           c_ptr(ConcurrentAccessor(real(64))),
+                           c_ptr(_RemoteBuffer(complex(128))),
+                           c_ptr(_LocalBuffer(complex(128))),
+                           int);
+}
 
-
-var globalPtrStoreNoQueue : [LocaleSpace] (c_ptr(Basis),
-                                           c_ptr(ConcurrentAccessor(real(64))),
-                                           c_ptr(_RemoteBuffer(complex(128))),
-                                           c_ptr(_LocalBuffer(complex(128))),
-                                           int);
+var globalPtrStoreNoQueue = new GlobalPtrStore();
+// var globalPtrStoreNoQueue : [LocaleSpace] (c_ptr(Basis),
+//                                            c_ptr(ConcurrentAccessor(real(64))),
+//                                            c_ptr(_RemoteBuffer(complex(128))),
+//                                            c_ptr(_LocalBuffer(complex(128))),
+//                                            int);
 
 config const kRemoteBufferSize = 150000;
 config const kNumTasks = here.maxTaskPar;
@@ -790,6 +797,7 @@ record Consumer {
 
 private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                                      const ref representatives : [] uint(64)) {
+  // logDebug("Calling localOffDiagonalNoQueue...");
   var totalTimer = new Timer();
   var initializationTimer = new Timer();
   totalTimer.start();
@@ -815,21 +823,33 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
                + remoteBufferSize - 1) / remoteBufferSize,
             10 * numProducerTasks),
         representatives.size);
-  globalPtrStoreNoQueue[here.id] = (c_const_ptrTo(matrix.basis),
+  // logDebug(matrix.basis, ", ", (newRemoteBuffers.dim(0).size, newRemoteBuffers.dim(1).size),
+  //                        ", ", (newLocalBuffers.dim(0).size, newLocalBuffers.dim(1).size));
+  // logDebug((c_const_ptrTo(matrix.basis), c_ptrTo(accessor),
+  //          c_ptrTo(newRemoteBuffers[0, 0]), c_ptrTo(newLocalBuffers[0, 0]), numChunks));
+  // logDebug("before: ", globalPtrStoreNoQueue.arr[here.id]);
+  globalPtrStoreNoQueue.arr[here.id] = (c_const_ptrTo(matrix.basis),
                                     c_ptrTo(accessor),
                                     c_ptrTo(newRemoteBuffers[0, 0]),
                                     c_ptrTo(newLocalBuffers[0, 0]),
                                     numChunks);
+  // logDebug("after: ", globalPtrStoreNoQueue.arr[here.id]);
   allLocalesBarrier.barrier();
 
-  const ptrStore : [0 ..# numLocales] globalPtrStoreNoQueue.eltType = globalPtrStoreNoQueue;
+  // logDebug("Check #1");
+  const ptrStore : [0 ..# numLocales] globalPtrStoreNoQueue.arr.eltType = globalPtrStoreNoQueue.arr;
+  // logDebug("Check #2");
   _offDiagInitLocalBuffers(numProducerTasks, newLocalBuffers, ptrStore);
+  // logDebug("Check #3");
   _offDiagInitRemoteBuffers(numProducerTasks, newRemoteBuffers, ptrStore);
+  // logDebug("Check #4");
 
   const ranges : [0 ..# numChunks] range(int) = chunks(0 ..# representatives.size, numChunks);
+  // logDebug("Check #5");
   const batchedOperatorChunkSize = (representatives.size + numChunks - 1) / numChunks;
   var moreWork : atomic bool = true;
   var curChunkIdx : atomic int = 0;
+  // logDebug("Check #6");
 
   var totalNumberChunks = 0;
   for localeIdx in 0 ..# numLocales {
@@ -839,13 +859,14 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
       totalNumberChunks += _numChunks;
     }
   }
+  // logDebug("Check #7");
   
   var numProcessedChunks : atomic int = 0;
 
-  logDebug("numChunks = ", numChunks, ", chunkSize = ",
-           batchedOperatorChunkSize, ", numTasks = ", numTasks,
-           ", representatives.size = ", representatives.size,
-           ", numberOffDiagTerms = ", matrix.numberOffDiagTerms());
+  // logDebug("numChunks = ", numChunks, ", chunkSize = ",
+  //          batchedOperatorChunkSize, ", numTasks = ", numTasks,
+  //          ", representatives.size = ", representatives.size,
+  //          ", numberOffDiagTerms = ", matrix.numberOffDiagTerms());
 
   var producerRunTime : [0 ..# numProducerTasks] real;
   var producerComputeOffDiagTime : [0 ..# numProducerTasks] real;
@@ -871,6 +892,7 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
   var consumerAccessTime : [0 ..# numConsumerTasks] real;
   var consumerFastOnTime : [0 ..# numConsumerTasks] real;
 
+  // logDebug("Check #8");
   allLocalesBarrier.barrier();
   initializationTimer.stop();
 
@@ -972,8 +994,9 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
              "    (bandwidth in GB/s: ", meanAndErrString(producerBandwidth), ")");
 }
 
-private proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
+proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                                const ref representatives : [] uint(64)) {
+  logDebug("Calling localMatrixVector...");
   assert(matrix.locale == here);
   assert(x.locale == here);
   assert(y.locale == here);

@@ -135,6 +135,9 @@ bin/primme: src/PRIMME.chpl
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) $(PRIMME_CFLAGS) -o $@ $< $(PRIMME_LDFLAGS)
 
+bin/Diagonalize: src/Diagonalize.chpl src/PRIMME.chpl $(MODULES)
+	@mkdir -p $(@D)
+	chpl $(CFLAGS) $(PRIMME_CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS) $(PRIMME_LDFLAGS)
 
 # Dummy file we use to reproduce internal compiler errors in Chapel for
 # submitting issues.

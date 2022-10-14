@@ -310,4 +310,16 @@ class BlockVector {
   // }
 }
 
+proc similar(const ref other : BlockVector(?eltType, ?rank)) {
+  return similar(other.eltType, other);
+}
+proc similar(type t, const ref other : BlockVector(?eltType, ?rank)) {
+  if rank == 1 then
+    return new BlockVector(t, other.counts);
+  else if rank == 2 then
+    return new BlockVector(t, other.numBlocks, other.counts);
+  else
+    compilerError("unsupported rank: " + rank:string);
+}
+
 } // end module Vector

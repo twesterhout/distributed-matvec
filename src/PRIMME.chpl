@@ -1,8 +1,11 @@
 module PRIMME {
   use AllLocalesBarriers;
-  use CPtr;
-  use SysCTypes;
+  use CTypes;
+  use IO;
   require "primme.h";
+
+  import LinearAlgebra;
+  import Random;
 
   extern const PRIMME_VERSION_MAJOR : int;
   extern const PRIMME_VERSION_MINOR : int;
@@ -15,6 +18,8 @@ module PRIMME {
   extern proc cprimme(evals : c_ptr(real(32)), evecs : c_ptr(complex(64)), resNorms : c_ptr(real(32)), const ref primme : primme_params) : c_int;
   extern proc dprimme(evals : c_ptr(real(64)), evecs : c_ptr(real(64)), resNorms : c_ptr(real(64)), const ref primme : primme_params) : c_int;
   extern proc zprimme(evals : c_ptr(real(64)), evecs : c_ptr(complex(128)), resNorms : c_ptr(real(64)), const ref primme : primme_params) : c_int;
+
+  extern proc primme_set_method(method : primme_preset_method, ref params : primme_params) : c_int;
 
   extern record JD_projectors {
     var LeftQ : c_int;
@@ -211,9 +216,183 @@ module PRIMME {
     var maxPrevRetain : c_int;
   }
 
-  // proc primmeMatrixMatvec(x : c_void_ptr, ldx : c_ptr(int(64)), y : c_void_ptr, ldy : c_ptr(int(64)), blockSize : c_int,
-  //                         primme : c_ptr(primme_params), ierr : c_ptr(c_int)) {
-  // }
+
+  record SumBuffer {
+    type eltType;
+    var dom : domain(1);
+    var arr : [dom] atomic eltType;
+  }
+
+  record BroadcastBuffer {
+    type eltType;
+    var dom : domain(1);
+    var arr : [dom] eltType;
+  }
+
+  var sumBufferReal32 = new SumBuffer(real(32));
+  var sumBufferReal64 = new SumBuffer(real(64));
+
+  var broadcastBufferReal32 = new BroadcastBuffer(real(32));
+  var broadcastBufferReal64 = new BroadcastBuffer(real(64));
+
+  proc primmeDatatypeToString(dtype : primme_op_datatype) {
+    if dtype == primme_op_half then return "real(16)";
+    if dtype == primme_op_float then return "real(32)";
+    if dtype == primme_op_double then return "real(64)";
+    if dtype == primme_op_quad then return "real(128)";
+    if dtype == primme_op_int then return "int(32)";
+    return "unknown";
+  }
+
+  pragma "ref"
+  inline proc getSumBuffer(type dtype) ref {
+    if dtype == real(32) then
+      return sumBufferReal32;
+    else if dtype == real(64) then
+      return sumBufferReal64;
+    else
+      compilerError("invalid dtype: " + dtype:string);
+  }
+
+  pragma "ref"
+  inline proc getBroadcastBuffer(type dtype) ref {
+    if dtype == real(32) then
+      return broadcastBufferReal32;
+    else if dtype == real(64) then
+      return broadcastBufferReal64;
+    else
+      compilerError("invalid dtype: " + dtype:string);
+  }
+
+  private proc globalSumReal(sendBuf : c_ptr(?eltType), recvBuf : c_ptr(eltType), count : c_ptr(c_int),
+                             primme : c_ptr(primme_params), ierr : c_ptr(c_int)) {
+    // allLocalesBarrier.barrier();
+    // try! stderr.writeln(here, ": Calling globalSumReal: ", sendBuf, ", ", recvBuf);
+
+    const n = count.deref():int;
+    const indices = 0 ..# n;
+    ref buffer = getSumBuffer(eltType);
+    // Grow the buffer if it's not big enough
+    // AND reset the buffer to all 0's
+    if here.id == 0 {
+      if n > buffer.dom.size then
+        buffer.dom = {indices};
+
+      // IMPORTANT!
+      buffer.arr.write(0, memoryOrder.relaxed);
+    }
+
+    // const sendArr = [i in indices] sendBuf[i];
+    // const recvArr = [i in indices] recvBuf[i];
+    // try! stderr.writeln(here, ": ", sendBuf, ", ", recvBuf, ", sendBuf=", sendArr, ", recvBuf=", recvArr);
+    // if here.id == 0 then
+    //   try! stderr.writeln(here, ": buffer.arr=", buffer.arr.read());
+    // Make sure locale 0 has had the chance to resize before proceeding          
+    allLocalesBarrier.barrier();
+
+    // Have all locales atomically add their results to the atomicBuff            
+    ref arr = buffer.arr;
+    forall i in indices do
+      arr[i].add(sendBuf[i], memoryOrder.relaxed);
+
+    // Make sure all locales have accumulated their contributions                 
+    allLocalesBarrier.barrier();
+
+    // Have each locale copy the results out into its buffer                      
+    forall i in indices do
+      recvBuf[i] = arr[i].read();
+
+    // const recvArrAfter = [i in indices] recvBuf[i];
+    // writeln(here, ": sendBuf=", sendArr, ", recvBufAfter=", recvArrAfter);
+    ierr.deref() = 0;
+
+    // try! stderr.writeln(here, ": Done with globalSumReal");
+    allLocalesBarrier.barrier();
+  }
+
+  export proc primmeGlobalSumReal(sendBuf : c_void_ptr, recvBuf : c_void_ptr, count : c_ptr(c_int),
+                                  primme : c_ptr(primme_params), ierr : c_ptr(c_int)) {
+    const dtype = primme.deref().globalSumReal_type;
+    if dtype == primme_op_float then
+      globalSumReal(sendBuf:c_ptr(real(32)), recvBuf:c_ptr(real(32)), count, primme, ierr);
+    else if dtype == primme_op_double then
+      globalSumReal(sendBuf:c_ptr(real(64)), recvBuf:c_ptr(real(64)), count, primme, ierr);
+    else
+      halt("primmeGlobalSumReal does not support " + primmeDatatypeToString(dtype));
+  }
+
+  private proc broadcastReal(buffer : c_ptr(?eltType), count : c_ptr(c_int),
+                             primme : c_ptr(primme_params), ierr : c_ptr(c_int)) {
+    // allLocalesBarrier.barrier();
+    // try! stderr.writeln(here, ": Calling broadcastReal: ", buffer);
+
+    const n = count.deref():int;
+    const indices = 0 ..# n;
+    ref tmpBuff = broadcastBufferReal64; // getBroadcastBuffer(eltType);
+
+    // const sendArr = [i in indices] buffer[i];
+    // writeln(here, ": ", buffer, ", sendBuf=", sendArr);
+
+    if here.id == 0 {
+      // grow the temp buff if it's not big enough                                
+      if n > tmpBuff.dom.size then
+        tmpBuff.dom = {indices};
+
+      // copy locale 0's data into the buffer                                     
+      forall i in indices with (ref tmpBuff) do
+        tmpBuff.arr[i] = buffer[i];
+    }
+
+    // wait until locale 0's got tmpBuff set up before proceeding                 
+    allLocalesBarrier.barrier();
+
+    // Locale 0 already has the data so doesn't need to do anything               
+    if here.id != 0 then
+      forall i in indices do
+        buffer[i] = tmpBuff.arr[i];
+
+    // const arrAfter = [i in indices] buffer[i];
+    // writeln(here, ": sendBuf=", sendArr, ", arrAfter=", arrAfter);
+
+    ierr.deref() = 0;
+
+    allLocalesBarrier.barrier();
+    // try! stderr.writeln(here, ": Done with broadcastReal");
+  }
+
+  export proc primmeBroadcastReal(buffer : c_void_ptr, count : c_ptr(c_int),
+                                  primme : c_ptr(primme_params), ierr : c_ptr(c_int)) {
+    const dtype = primme.deref().broadcastReal_type;
+    // if dtype == primme_op_float then
+    //   broadcastReal(buffer:c_ptr(real(32)), count, primme, ierr);
+    // else
+    if dtype == primme_op_double then
+      broadcastReal(buffer:c_ptr(real(64)), count, primme, ierr);
+    else
+      halt("primmeBroadcastReal does not support " + primmeDatatypeToString(dtype));
+  }
+
+  export proc primmeMatrixMatvec(x : c_void_ptr, ldx : c_ptr(int(64)), y : c_void_ptr, ldy : c_ptr(int(64)),
+                                 blockSize : c_ptr(c_int), primme : c_ptr(primme_params), ierr : c_ptr(c_int)) {
+    ref params = primme.deref();
+    if blockSize.deref() != 1 then
+      writeln("blockSize = ", blockSize.deref());
+    assert(blockSize.deref() == 1);
+    assert(ldx.deref() == params.nLocal && ldy.deref() == params.nLocal);
+    assert(params.numProcs == numLocales);
+    assert(params.procID == here.id);
+    assert(params.matrixMatvec_type == primme_op_double);
+
+    const size = params.nLocal:int;
+    ref xArr = makeArrayFromPtr(x:c_ptr(real(64)), (size,));
+    ref yArr = makeArrayFromPtr(y:c_ptr(real(64)), (size,));
+
+    const matrixPtr = params.matrix:c_ptr(real(64));
+    ref mArr = makeArrayFromPtr(matrixPtr, (params.nLocal, params.n));
+
+    yArr = LinearAlgebra.dot(mArr, xArr);
+    ierr.deref() = 0;
+  }
 
   // proc eigs(matrix) {
   //   assert(matrix.isLocal);
@@ -235,7 +414,7 @@ module PRIMME {
   }
 
   pragma "no copy return"
-  proc makeArrayFromPtr(ptr : c_ptr, shape)
+  private proc makeArrayFromPtr(ptr : c_ptr, shape)
       where isTuple(shape) && isHomogeneousTuple(shape) && shape[0].type == int {
     var dom = defaultDist.dsiNewRectangularDom(rank=shape.size,
                                                idxType=shape[0].type,
@@ -258,33 +437,57 @@ module PRIMME {
   proc main() {
     writeln("Hello world!");
 
-    var a = [1, 2, 3, 4, 5, 6];
-    var b : chpl_external_array =
-      chpl_make_external_array_ptr(c_ptrTo(a[0]):c_void_ptr, a.size:uint);
-    ref c = makeArrayFromPtr(b.elts : c_ptr(int), (2, 3))[.., 0 ..# 2]; // reshape(makeArrayFromExternArray(b, int), {0 ..# 2, 0 ..# 3});
-    c[0, 1] = -1;
-    writeln(a);
-    writeln(c);
+
+    var evecs : [0 ..# 2, 0 ..# 5] real;
+    var evals : [0 ..# 2] real;
+    var resnorms : [0 ..# 2] real;
+
+    var matrix : [0 ..# 5, 0 ..# 5] real;
+    Random.fillRandom(matrix);
+
+    // Symmetrize
+    for i in matrix.dim(0) do
+      for j in matrix.dim(1) do
+        if i > j then
+          matrix[i, j] = matrix[j, i];
+
+    writeln(matrix);
+
+    // var a = [1, 2, 3, 4, 5, 6];
+    // var b : chpl_external_array =
+    //   chpl_make_external_array_ptr(c_ptrTo(a[0]):c_void_ptr, a.size:uint);
+    // ref c = makeArrayFromPtr(b.elts : c_ptr(int), (2, 3))[.., 0 ..# 2]; // reshape(makeArrayFromExternArray(b, int), {0 ..# 2, 0 ..# 3});
+    // c[0, 1] = -1;
+    // writeln(a);
+    // writeln(c);
 
     var params : primme_params;
     primme_initialize(params);
     primme_display_params(params);
-    primme_free(params);
 
-    /* Set problem matrix */
-    // params.matrixMatvec = LaplacianMatrixMatvec;
-                            /* Function that implements the matrix-vector product
-                               A*x for solving the problem A*x = l*x */
-  
-    /* Set problem parameters */
-    params.n = 100; /* set problem dimension */
-    params.numEvals = 10;   /* Number of wanted eigenpairs */
-    params.eps = 1e-9;      /* ||r|| <= eps * ||matrix|| */
+    params.matrix = c_ptrTo(matrix[0, 0]);
+    params.matrixMatvec = c_ptrTo(primmeMatrixMatvec);
+    params.maxBlockSize = 1;
+    params.n = 5;
+    params.numEvals = 2;
+    params.eps = 1e-9;
     params.target = primme_smallest;
-                            /* Wanted the smallest eigenvalues */
 
-    /* Set preconditioner (optional) */
-    // primme.applyPreconditioner = LaplacianApplyPreconditioner;
-    // params.correctionParams.precondition = 1;
+    primme_set_method(PRIMME_DEFAULT_METHOD, params);
+
+    const ierr = dprimme(c_ptrTo(evals[0]), c_ptrTo(evecs[0, 0]), c_ptrTo(resnorms[0]), params);
+
+    writeln(ierr);
+    writeln(evals);
+    writeln(evecs);
+    writeln(resnorms);
+
+    const (evals2, evecs2) = LinearAlgebra.eig(matrix, right=true);
+
+    writeln(evals2);
+    writeln(evecs2);
+    
+
+    primme_free(params);
   }
 }
