@@ -102,6 +102,9 @@ module FFI {
     var representatives : chpl_external_array;
     // ... other stuff ...
   }
+  extern record ls_hs_expr {
+    // ... other stuff ...
+  }
   extern record ls_hs_nonbranching_terms {
     var number_terms : c_int;
     var number_bits : c_int;
@@ -112,6 +115,13 @@ module FFI {
     var off_diag_terms : c_ptr(ls_hs_nonbranching_terms);
     var diag_terms : c_ptr(ls_hs_nonbranching_terms);
     // ... other stuff ...
+  }
+
+  extern record ls_hs_yaml_config {
+    var basis : c_ptr(ls_hs_basis);
+    var hamiltonian : c_ptr(ls_hs_operator);
+    var number_observables : c_int;
+    var observables : c_ptr(c_ptr(ls_hs_operator));
   }
 
   extern proc ls_hs_init();
@@ -170,16 +180,28 @@ module FFI {
 
   // extern proc ls_hs_create_basis_kernels(basis : c_ptr(ls_hs_basis)) : c_ptr(ls_hs_basis_kernels);
   // extern proc ls_hs_destroy_basis_kernels(kernels : c_ptr(ls_hs_basis_kernels));
+  extern proc ls_hs_create_expr(expr : c_string);
+  extern proc ls_hs_destroy_expr(expr : c_ptr(ls_hs_expr));
+  extern proc ls_hs_expr_to_json(expr : c_ptr(ls_hs_expr)) : c_string;
+  extern proc ls_hs_expr_from_json(json_string : c_string) : c_ptr(ls_hs_expr);
 
   extern proc ls_hs_create_operator(basis : c_ptr(ls_hs_basis),
-    s : c_string, numberTuples : c_int, tupleSize : c_int, tuples : c_ptr(c_int)) : c_ptr(ls_hs_operator);
+                                    expr : c_ptr(ls_hs_expr)) : c_ptr(ls_hs_operator);
+  extern proc ls_hs_clone_operator(op : c_ptr(ls_hs_operator)) : c_ptr(ls_hs_operator);
   extern proc ls_hs_operator_plus(a : c_ptr(ls_hs_operator), b : c_ptr(ls_hs_operator)) : c_ptr(ls_hs_operator);
   extern proc ls_hs_print_terms(op : c_ptr(ls_hs_operator));
   extern proc ls_hs_destroy_operator_v2(op : c_ptr(ls_hs_operator));
 
   extern proc ls_hs_operator_max_number_off_diag(op : c_ptr(ls_hs_operator)) : c_int;
+  extern proc ls_hs_operator_is_hermitian(op : c_ptr(ls_hs_operator)) : bool;
+  extern proc ls_hs_operator_is_real(op : c_ptr(ls_hs_operator)) : bool;
+
+  extern proc ls_hs_operator_get_expr(op : c_ptr(ls_hs_operator)) : c_ptr(ls_hs_expr);
 
   extern proc ls_hs_load_hamiltonian_from_yaml(filename : c_string) : c_ptr(ls_hs_operator);
+
+  extern proc ls_hs_load_yaml_config(filename : c_string) : c_ptr(ls_hs_yaml_config);
+  extern proc ls_hs_destroy_yaml_config(p : c_ptr(ls_hs_yaml_config));
 
   extern proc ls_hs_operator_apply_diag_kernel(op : c_ptr(ls_hs_operator),
     batchSize : c_ptrdiff, alphas : c_ptr(uint(64)), alphas_stride : c_ptrdiff,

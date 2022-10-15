@@ -291,12 +291,12 @@ proc _enumStatesComputeCounts(ref buckets,
   var counts : [0 ..# numChunks, 0 ..# numLocales] int;
   const countsPtr = c_ptrTo(counts[0, 0]);
 
-  const serializedBasis : string = basis.toJSON();
+  const ref serializedBasis = basis.json_repr;
   coforall loc in Locales do on loc {
     var outerTimer = new Timer();
     outerTimer.start();
 
-    const myBasis = new Basis(serializedBasis.localize());
+    const myBasis = new Basis(serializedBasis);
     const myRanges : [0 ..# numChunks] range(uint(64)) = ranges;
     const mySubdomain = buckets.localSubdomain();
 

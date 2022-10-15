@@ -11,35 +11,30 @@ module ForeignTypes {
     var _json_repr : string;
 
     proc init(p : c_ptr(ls_hs_basis), owning : bool = true) {
-      // logDebug("Basis(c_ptr(ls_hs_basis), bool)");
       assert(here == p.locale);
       this.payload = p;
       this.owning = owning;
       this._origin = here;
       complete();
-      // if owning then
       this._json_repr = _toJSON();
     }
     proc init(jsonString : string) {
-      // logDebug("ls_hs_basis_from_json");
       const s = jsonString.localize();
       this.payload = ls_hs_basis_from_json(s.c_str());
       this.owning = true;
       this._origin = here;
       this._json_repr = s;
     }
+
     proc init=(const ref from : Basis) {
       if here == from._origin {
         this.payload = ls_hs_clone_basis(from.payload);
         this.owning = true;
         this._origin = here;
-        this._json_repr = from._json_repr;
+        this._json_repr = from.json_repr;
       }
       else {
-        var s : string;
-        on from._origin {
-          s = from.toJSON();
-        }
+        const s = from.json_repr.localize();
         this.payload = ls_hs_basis_from_json(s.c_str());
         this.owning = true;
         this._origin = here;
@@ -53,11 +48,7 @@ module ForeignTypes {
       return c_str:string;
     }
 
-    proc toJSON() const ref : string {
-      if _json_repr == "" then
-        halt("JSON representation not available");
-      return _json_repr;
-    }
+    proc json_repr const ref : string { return _json_repr; }
 
     /*
     proc chpl__serialize() {
@@ -127,7 +118,6 @@ module ForeignTypes {
       return ls_hs_max_state_estimate(payload);
     }
 
-
     proc representatives() {
       ref rs = payload.deref().representatives;
       if rs.elts == nil then
@@ -146,37 +136,37 @@ module ForeignTypes {
     lhs._json_repr = rhs._json_repr;
   }
 
-  proc loadBasisFromYaml(filename : string) {
-    var ptr = ls_hs_create_spin_basis_from_yaml(filename.localize().c_str());
-    if ptr == nil then
-      halt("failed to load Basis from " + filename);
-    return new Basis(ptr);
-  }
+  // proc loadBasisFromYaml(filename : string) {
+  //   var ptr = ls_hs_create_spin_basis_from_yaml(filename.localize().c_str());
+  //   if ptr == nil then
+  //     halt("failed to load Basis from " + filename);
+  //   return new Basis(ptr);
+  // }
 
-  proc SpinBasis(json : string) {
-    return new Basis(ls_hs_create_spin_basis_from_json(json.localize().c_str()));
-  }
-  proc SpinBasis(numberSites : int, hammingWeight : int = -1) {
-    var json  = "{ \"number_spins\": " + numberSites:string;
-    if hammingWeight != -1 then
-      json += ", \"hamming_weight\": " + hammingWeight:string;
-    json += " }";
-    return SpinBasis(json);
-    // return new Basis(ls_hs_create_basis(LS_HS_SPIN, numberSites:c_int, 
-    //                                     numberSites:c_int, hammingWeight:c_int));
-  }
-  proc SpinlessFermionicBasis(numberSites : int, numberParticles : int = -1) {
-    return new Basis(ls_hs_create_basis(LS_HS_SPINLESS_FERMION, numberSites:c_int,
-                                        numberParticles:c_int, -1));
-  }
-  proc SpinfulFermionicBasis(numberSites : int, numberParticles : int = -1) {
-    return new Basis(ls_hs_create_basis(LS_HS_SPINFUL_FERMION, numberSites:c_int,
-                                        numberParticles:c_int, -1));
-  }
-  proc SpinfulFermionicBasis(numberSites : int, numberUp : int, numberDown : int) {
-    return new Basis(ls_hs_create_basis(LS_HS_SPINFUL_FERMION, numberSites:c_int,
-                                        (numberUp + numberDown):c_int, numberUp:c_int));
-  }
+  // proc SpinBasis(json : string) {
+  //   return new Basis(ls_hs_create_spin_basis_from_json(json.localize().c_str()));
+  // }
+  // proc SpinBasis(numberSites : int, hammingWeight : int = -1) {
+  //   var json  = "{ \"number_spins\": " + numberSites:string;
+  //   if hammingWeight != -1 then
+  //     json += ", \"hamming_weight\": " + hammingWeight:string;
+  //   json += " }";
+  //   return SpinBasis(json);
+  //   // return new Basis(ls_hs_create_basis(LS_HS_SPIN, numberSites:c_int, 
+  //   //                                     numberSites:c_int, hammingWeight:c_int));
+  // }
+  // proc SpinlessFermionicBasis(numberSites : int, numberParticles : int = -1) {
+  //   return new Basis(ls_hs_create_basis(LS_HS_SPINLESS_FERMION, numberSites:c_int,
+  //                                       numberParticles:c_int, -1));
+  // }
+  // proc SpinfulFermionicBasis(numberSites : int, numberParticles : int = -1) {
+  //   return new Basis(ls_hs_create_basis(LS_HS_SPINFUL_FERMION, numberSites:c_int,
+  //                                       numberParticles:c_int, -1));
+  // }
+  // proc SpinfulFermionicBasis(numberSites : int, numberUp : int, numberDown : int) {
+  //   return new Basis(ls_hs_create_basis(LS_HS_SPINFUL_FERMION, numberSites:c_int,
+  //                                       (numberUp + numberDown):c_int, numberUp:c_int));
+  // }
 
   proc isRepresentative(const ref basis : Basis, const ref alphas : [?D] uint(64),
                         ref are_representatives : [?D2] uint(8),
@@ -207,27 +197,64 @@ module ForeignTypes {
     var payload : c_ptr(ls_hs_operator);
     var basis : Basis;
     var owning : bool;
+    var _origin : locale;
 
-    proc init(const ref basis : Basis, expression : string, const ref indices : [?D] ?i)
-      where D.rank == 2 {
+    // proc init(const ref basis : Basis, expression : string, const ref indices : [?D] ?i)
+    //     where D.rank == 2 {
+    //   assert(basis._origin == here);
 
-      const c_indices = indices:c_int;
-      const c_expr = expression.localize().c_str();
-      print_external_string(c_expr);
-      this.payload = ls_hs_create_operator(basis.payload, c_expr,
-        indices.dim(0).size:c_int, indices.dim(1).size:c_int, c_const_ptrTo(c_indices));
+    //   const c_indices = indices:c_int;
+    //   const c_expr = expression.localize().c_str();
+    //   print_external_string(c_expr);
+    //   this.payload = ls_hs_create_operator(basis.payload, c_expr,
+    //     indices.dim(0).size:c_int, indices.dim(1).size:c_int, c_const_ptrTo(c_indices));
+    //   this.basis = new Basis(this.payload.deref().basis, owning=false);
+    // }
+    proc init(const ref basis : Basis, expression : c_ptr(ls_hs_expr)) {
+      assert(basis._origin == here);
+      assert(expression.locale == here);
+
+      this.payload = ls_hs_create_operator(basis.payload, expression);
       this.basis = new Basis(this.payload.deref().basis, owning=false);
+      this.owning = true;
+      this._origin = here;
     }
     proc init(raw : c_ptr(ls_hs_operator), owning : bool = true) {
+      assert(raw.locale == here);
       this.payload = raw;
-      this.basis = new Basis(this.payload.deref().basis, owning=owning);
+      this.basis = new Basis(this.payload.deref().basis, owning=false);
+      this.owning = owning;
+      this._origin = here;
     }
+
     proc init=(const ref from : Operator) {
-      halt("Operator.init= is not yet implemented");
-      this.payload = nil;
-      this.basis = new Basis(nil, owning=false);
-      this.owning = false;
+      if from._origin == here {
+        init(ls_hs_clone_operator(from.payload), owning=true);
+      }
+      else {
+        var s : string;
+        on from._origin do
+          s = from.exprToJSON();
+
+        var expr = ls_hs_expr_from_json(s.localize().c_str());
+        defer ls_hs_destroy_expr(expr);
+
+        var basis = from.basis;
+        init(basis, expr);
+      }
     }
+
+    proc exprToJSON() {
+      var expr = ls_hs_operator_get_expr(payload);
+      if expr == nil then halt("failed to get expr");
+      defer ls_hs_destroy_expr(expr);
+
+      var c_str = ls_hs_expr_to_json(expr);
+      defer ls_hs_destroy_string(c_str);
+
+      return c_str:string;
+    }
+
     proc deinit() {
       if owning then
         ls_hs_destroy_operator_v2(payload);
@@ -262,19 +289,44 @@ module ForeignTypes {
           c_const_ptrTo(alphas), 1, c_ptrTo(betas), 1, c_ptrTo(coeffs));
     }
 
+    proc isHermitian : bool { return ls_hs_operator_is_hermitian(payload); }
+    proc isReal : bool { return ls_hs_operator_is_real(payload); }
   }
 
-  proc loadHamiltonianFromYaml(filename : string) {
-    var ptr = ls_hs_load_hamiltonian_from_yaml(filename.localize().c_str());
-    if ptr == nil then
-      halt("failed to load Hamiltonian from " + filename);
-    return new Operator(ptr);
+  proc loadConfigFromYaml(filename : string, param hamiltonian = false,
+                                             param observables = false) {
+    const configPtr = ls_hs_load_yaml_config(filename.localize().c_str());
+    if configPtr == nil then
+      halt("failed to load Config from '" + filename + "'");
+    defer ls_hs_destroy_yaml_config(configPtr);
+   
+    ref conf = configPtr.deref();
+    const basis = new Basis(ls_hs_clone_basis(conf.basis), owning=true);
+
+    if hamiltonian && conf.hamiltonian == nil then
+      halt("'" + filename + "' does not contain a Hamiltonian");
+    const h = if hamiltonian
+                then new Operator(ls_hs_clone_operator(conf.hamiltonian), owning=true)
+                else nil;
+
+    var os : [0 ..# conf.number_observables:int] Operator =
+      [i in 0 ..# conf.number_observables:int]
+        new Operator(ls_hs_clone_operator(conf.observables[i]), owning=true);
+
+    if !hamiltonian && !observables then return basis;
+    if hamiltonian && !observables then return (basis, h);
+    if !hamiltonian && observables then return (basis, os);
+    if hamiltonian && observables then return (basis, h, os);
   }
 
-  operator +(const ref a : Operator, const ref b : Operator) {
-    return new Operator(ls_hs_operator_plus(a.payload, b.payload));
-  }
+  // proc loadHamiltonianFromYaml(filename : string) {
+  //   var ptr = ls_hs_load_hamiltonian_from_yaml(filename.localize().c_str());
+  //   if ptr == nil then
+  //     halt("failed to load Hamiltonian from " + filename);
+  //   return new Operator(ptr);
+  // }
 
-
-
+  // operator +(const ref a : Operator, const ref b : Operator) {
+  //   return new Operator(ls_hs_operator_plus(a.payload, b.payload));
+  // }
 }

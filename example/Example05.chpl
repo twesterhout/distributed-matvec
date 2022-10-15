@@ -86,7 +86,8 @@ proc main() {
 
   // for (i, n) in zip(0 .., x._counts) do
   //   writeln("x: ", i, ": ", n, " -> ", n.locale);
-  var z = new BlockVector(x.eltType, x.innerDom.dim(0).size, x.counts);
+  // var z = new BlockVector(x.eltType, x.innerDom.dim(0).size, x.counts);
+  var z = similar(x);
   // for (i, n) in zip(0 .., z._counts) do
   //   writeln("z: ", i, ": ", n, " -> ", n.locale);
 

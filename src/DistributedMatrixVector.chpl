@@ -996,7 +996,7 @@ private proc localOffDiagonalNoQueue(matrix : Operator, const ref x : [] ?eltTyp
 
 proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
                                const ref representatives : [] uint(64)) {
-  logDebug("Calling localMatrixVector...");
+  // logDebug("Calling localMatrixVector...");
   assert(matrix.locale == here);
   assert(x.locale == here);
   assert(y.locale == here);

@@ -132,7 +132,7 @@ module Diagonalize {
                                     _y : c_void_ptr, _ldy : c_ptr(int(64)),
                                     _blockSize : c_ptr(c_int), primme : c_ptr(primme_params),
                                     _ierr : c_ptr(c_int)) {
-    logDebug("Calling ls_chpl_primme_matvec ...");
+    // logDebug("Calling ls_chpl_primme_matvec ...");
     const blockSize = _blockSize.deref():int;
     // if blockSize != 1 then
     //   halt("currently only blockSize=1 is supported");
@@ -154,46 +154,45 @@ module Diagonalize {
     }
 
     _ierr.deref() = 0;
-    logDebug("Done with ls_chpl_primme_matvec ...");
+    // logDebug("Done with ls_chpl_primme_matvec ...");
   }
+
+  config const input : string = "data/heisenberg_chain_10.yaml";
+  config const numEvals : int = 1;
+  config const maxBlockSize : int = 1;
+  config const eps : real = 1e-6;
+
 
   proc main() {
     initRuntime();
     defer deinitRuntime();
-    writeln("Hello world!");
 
-    const filename = "data/heisenberg_chain_10.yaml";
-    const matrix = loadHamiltonianFromYaml(filename);
+    // Parse the input configuration file
+    const (basis, matrix, observables) =
+      loadConfigFromYaml(input, hamiltonian=true, observables=true);
 
+    if numEvals < 1 then
+      halt("invalid numEvals: " + numEvals:string);
+
+    if !matrix.isHermitian then
+      halt("Hamiltonian is not Hermitian");
+
+    if !matrix.isReal then
+      halt("Hamiltonian is not real");
+
+    // Build the basis
     const masks;
-    const basisStates = enumerateStates(matrix.basis, masks);
+    const basisStates = enumerateStates(basis, masks);
 
-    const numEvals = 2;
+    // Allocate space for eigenvectors
     var evecs = new BlockVector(real(64), numEvals, basisStates.counts);
-
-    // var matrix : [0 ..# 4, 0 ..# 4] real;
-    // Random.fillRandom(matrix, seed=53);
-
-    // Symmetrize
-    // for i in matrix.dim(0) do
-    //   for j in matrix.dim(1) do
-    //     if i > j then
-    //       matrix[i, j] = matrix[j, i];
-
-    // writeln(matrix);
-
+    var evals : [0 ..# numEvals] real(64);
+    var resNorms : [0 ..# numEvals] real(64);
 
     coforall loc in Locales with (ref evecs)
                             do on loc {
 
-      // var myEvecs : [0 ..# (4 / numLocales)] real;
-      // var myEvals : [0 ..# 1] real;
-      // var myResNorms : [0 ..# 1] real;
-      // const myMatrix = matrix[loc.id * (4 / numLocales) .. (loc.id + 1) * (4 / numLocales), ..];
-      // logDebug("initially: ", globalPtrStoreNoQueue.arr[here.id]);
-
-
-      var myMatrix = loadHamiltonianFromYaml(filename);
+      const myMatrix = matrix;
       const ref myBasisStates = basisStates.getBlock(loc.id);
       myMatrix.basis.uncheckedSetRepresentatives(myBasisStates);
 
@@ -201,22 +200,22 @@ module Diagonalize {
       var myEvals : [0 ..# numEvals] real(64);
       var myResNorms : [0 ..# numEvals] real(64);
 
+      // Configuring PRIMME
       var params : primme_params;
       primme_initialize(params);
-      // params.matrix = c_const_ptrTo(myMatrix[0, 0]);
-      // params.matrixMatvec = c_ptrTo(primmeMatrixMatvec);
+      defer primme_free(params);
 
       params.matrix = myMatrix.payload;
       params.matrixMatvec = c_ptrTo(ls_chpl_primme_matvec);
-      params.maxBlockSize = 1;
+      params.maxBlockSize = maxBlockSize:c_int;
       params.n = + reduce basisStates.counts;
       params.numEvals = numEvals:c_int;
-      params.eps = 1e-6;
+      params.eps = eps;
       params.target = primme_smallest;
 
       params.numProcs = numLocales:int(32);
       params.procID = loc.id:int(32);
-      params.nLocal = myBasisStates.size; // myEvecs.dim(0).size;
+      params.nLocal = myBasisStates.size;
       params.globalSumReal = c_ptrTo(primmeGlobalSumReal);
       params.globalSumReal_type = primme_op_double;
       params.broadcastReal = c_ptrTo(primmeBroadcastReal);
@@ -224,22 +223,28 @@ module Diagonalize {
 
       params.printLevel = 5;
 
-      primme_set_method(PRIMME_DEFAULT_METHOD, params);
-      primme_display_params(params);
+      primme_set_method(PRIMME_DEFAULT_MIN_MATVECS, params);
+      // primme_display_params(params);
 
+      // allLocalesBarrier.barrier();
+
+      // writeln(here, ": calling dprimme ...");
       allLocalesBarrier.barrier();
 
-      writeln(here, ": calling dprimme ...");
-      allLocalesBarrier.barrier();
-
-      const ierr = dprimme(c_ptrTo(myEvals[0]),
+      const ierr = dprimme(c_ptrTo(myEvals),
                            c_ptrTo(myEvecs[myEvecs.domain.low]),
-                           c_ptrTo(myResNorms[0]),
+                           c_ptrTo(myResNorms),
                            params);
+      if ierr != 0 then
+        halt("PRIMME failed with error code: " + ierr:string);
 
-      writeln(ierr, ": ", myEvals, ", ", myResNorms);
-
-      primme_free(params);
+      if loc.id == 0 {
+        evals = myEvals;
+        resNorms = myResNorms;
+      }
     }
+
+    writeln(evals);
+    writeln(resNorms);
   }
 }
