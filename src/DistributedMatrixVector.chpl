@@ -1014,7 +1014,7 @@ proc matrixVectorProduct(matrixFilename : string,
                          const ref representatives) {
   logDebug("Calling matrixVectorProduct...");
   coforall loc in Locales with (ref y) do on loc {
-    var myMatrix = loadHamiltonianFromYaml(matrixFilename);
+    var (_, myMatrix) = loadConfigFromYaml(matrixFilename, hamiltonian=true);
     const ref myX = x.getBlock(loc.id)[0, ..];
     ref myY = y.getBlock(loc.id)[0, ..];
     const ref myBasisStates = representatives.getBlock(loc.id);

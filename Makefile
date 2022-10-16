@@ -12,11 +12,13 @@ LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell -llattice_symmetries_c
 
 PRIMME_CFLAGS = -I/home/tom/src/primme/include
 PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -llapacke -lopenblas -lm -lgomp -lpthread
+HDF5_CFLAGS = $(shell pkg-config --cflags hdf5)
+HDF5_LIBS = -lhdf5_hl $(shell pkg-config --libs hdf5)
 
 # MODULES = src/ApplyOperator.chpl src/StatesEnumeration.chpl src/helper.c
 MODULES = src/LatticeSymmetries.chpl \
 	  src/FFI.chpl \
-	  src/HDF5.chpl \
+	  src/MyHDF5.chpl \
 	  src/ForeignTypes.chpl \
 	  src/StatesEnumeration.chpl \
 	  src/ConcurrentAccessor.chpl \
@@ -125,7 +127,7 @@ bin/Example04: example/Example04.chpl $(MODULES)
 
 bin/Example05: example/Example05.chpl $(MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS) 
 
 bin/dummy: src/dummy.chpl
 	@mkdir -p $(@D)

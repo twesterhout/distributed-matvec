@@ -38,7 +38,7 @@ proc main() {
 
   var timer = new Timer();
   // timer.start();
-  var matrix = loadHamiltonianFromYaml(kHamiltonian);
+  var (_, matrix) = loadConfigFromYaml(kHamiltonian, hamiltonian=true);
   // timer.stop();
   // logDebug("Reading the Hamiltonian took ", timer.elapsed());
 

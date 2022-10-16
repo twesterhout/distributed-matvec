@@ -1,6 +1,8 @@
-module HDF5 {
+module MyHDF5 {
   use CTypes;
   use BlockDist;
+  import HDF5;
+  import HDF5.C_HDF5;
 
   use LatticeSymmetries.FFI;
 
@@ -18,25 +20,109 @@ module HDF5 {
    * :rtype: [] int
    */
   proc datasetShape(filename : string, dataset : string) {
-    const rank = datasetRank(filename, dataset);
-    var c_shape : [0 ..# rank] uint(64);
-    ls_hs_hdf5_get_dataset_shape(filename.localize().c_str(), dataset.localize().c_str(),
-      c_ptrTo(c_shape));
-    return c_shape:int; 
+    const file_id = C_HDF5.H5Fopen(filename.localize().c_str(),
+                                   C_HDF5.H5F_ACC_RDONLY, C_HDF5.H5P_DEFAULT);
+    defer C_HDF5.H5Fclose(file_id);
+
+    const dset_id = C_HDF5.H5Dopen(file_id, dataset.localize().c_str(), C_HDF5.H5P_DEFAULT);
+    defer C_HDF5.H5Dclose(dset_id);
+
+    const dspace_id = C_HDF5.H5Dget_space(dset_id);
+    defer C_HDF5.H5Sclose(dspace_id);
+
+    const rank = C_HDF5.H5Sget_simple_extent_ndims(dspace_id);
+    var c_shape : [0 ..# rank] C_HDF5.hsize_t;
+    H5Sget_simple_extent_dims(dspace_id, c_ptrTo(c_shape), nil);
+
+    return c_shape:int;
   }
 
-  private inline proc _makeDomain(shape : 1 * int) : domain(1) { return {0 ..# shape[0]}; }
-  private inline proc _makeDomain(shape : 2 * int) : domain(2) { return {0 ..# shape[0], 0 ..# shape[1]}; }
-
-  proc readDataset(filename : string, dataset : string, type eltType, param rank : int)
-      where rank == 1 {
-    const shape = datasetShape(filename, dataset);
-    return readDatasetChunk(filename, dataset, eltType, (0,), (shape[0],));
+  private inline proc _makeDomain(shape : 1 * int) : domain(1) {
+    return {0 ..# shape[0]};
   }
-  proc readDataset(filename : string, dataset : string, type eltType, param rank : int)
-      where rank == 2 {
-    const shape = datasetShape(filename, dataset);
-    return readDatasetChunk(filename, dataset, eltType, (0, 0), (shape[0], shape[1]));
+  private inline proc _makeDomain(shape : 2 * int) : domain(2) {
+    return {0 ..# shape[0], 0 ..# shape[1]};
+  }
+  private inline proc _makeDomain(shape : 3 * int) : domain(3) {
+    return {0 ..# shape[0], 0 ..# shape[1], 0 ..# shape[2]};
+  }
+  private inline proc _makeDomain(shape : 4 * int) : domain(3) {
+    return {0 ..# shape[0], 0 ..# shape[1], 0 ..# shape[2], 0 ..# shape[3]};
+  }
+
+  proc readDataset(filename : string, dataset : string, type eltType, param rank : int) {
+    const file_id = C_HDF5.H5Fopen(filename.localize().c_str(),
+                                   C_HDF5.H5F_ACC_RDONLY, C_HDF5.H5P_DEFAULT);
+    defer C_HDF5.H5Fclose(file_id);
+
+    const dset_id = C_HDF5.H5Dopen(file_id, dataset.localize().c_str(), C_HDF5.H5P_DEFAULT);
+    defer C_HDF5.H5Dclose(dset_id);
+
+    const dspace_id = C_HDF5.H5Dget_space(dset_id);
+    defer C_HDF5.H5Sclose(dspace_id);
+
+    const datasetRank = C_HDF5.H5Sget_simple_extent_ndims(dspace_id);
+    if arr.rank != datasetRank then
+      halt("rank mismatch in file: '" + filename + "' dataset: '" + dataset +
+           "'  " + arr.rank:string + " != " + datasetRank:string);
+
+    const dtype_id = C_HDF5.H5Dget_type(dset_id);
+    defer C_HDF5.H5Tclose(dtype_id);
+    if C_HDF5.H5Tequal(HDF5.getHDF5Type(eltType), dtype_id) <= 0 then
+      halt("type mismatch in file: '" + filename + "' dataset: '" + dataset +
+           "'  " + HDF5.getHDF5Type(eltType):string + " != " + dtype_id:string);
+  
+    var c_shape : [0 ..# arr.rank] C_HDF5.hsize_t;
+    H5Sget_simple_extent_dims(dspace_id, c_ptrTo(c_shape), nil);
+
+    const mspace_id = C_HDF5.H5Screate_simple(arr.rank, c_ptrTo(c_shape), nil);
+    defer C_HDF5.H5Sclose(mspace_id);
+
+    var arr : [_makeDomain(c_shape:int)] eltType;
+    C_HDF5.H5Dread(dset_id, dtype_id, mspace_id, dspace_id,
+                   C_HDF5.H5P_DEFAULT, c_ptrTo(arr[arr.domain.low]));
+    return arr;
+  }
+
+  proc readDatasetChunk(filename : string, dataset : string, offset, ref arr : [] ?eltType)
+      where isTuple(offset) && offset.size == arr.rank {
+    const file_id = C_HDF5.H5Fopen(filename.localize().c_str(),
+                                   C_HDF5.H5F_ACC_RDONLY, C_HDF5.H5P_DEFAULT);
+    defer C_HDF5.H5Fclose(file_id);
+
+    const dset_id = C_HDF5.H5Dopen(file_id, dataset.localize().c_str(), C_HDF5.H5P_DEFAULT);
+    defer C_HDF5.H5Dclose(dset_id);
+
+    const dspace_id = C_HDF5.H5Dget_space(dset_id);
+    defer C_HDF5.H5Sclose(dspace_id);
+
+    const datasetRank = C_HDF5.H5Sget_simple_extent_ndims(dspace_id);
+    if arr.rank != datasetRank then
+      halt("rank mismatch in file: '" + filename + "' dataset: '" + dataset +
+           "'  " + arr.rank:string + " != " + datasetRank:string);
+
+    const dtype_id = C_HDF5.H5Dget_type(dset_id);
+    defer C_HDF5.H5Tclose(dtype_id);
+    if C_HDF5.H5Tequal(HDF5.getHDF5Type(eltType), dtype_id) <= 0 then
+      halt("type mismatch in file: '" + filename + "' dataset: '" + dataset +
+           "'  " + HDF5.getHDF5Type(eltType):string + " != " + dtype_id:string);
+    
+    var c_offset : [0 ..# arr.rank] C_HDF5.hsize_t;
+    var c_shape : [0 ..# arr.rank] C_HDF5.hsize_t;
+    for i in 0 ..# arr.rank {
+      c_offset[i] = offset[i]:C_HDF5.hsize_t;
+      c_shape[i] = arr.dim(i).size:C_HDF5.hsize_t;
+    }
+
+    const mspace_id = C_HDF5.H5Screate_simple(arr.rank, c_ptrTo(c_shape), nil);
+    defer C_HDF5.H5Sclose(mspace_id);
+
+    C_HDF5.H5Sselect_hyperslab(dspace_id, C_HDF5.H5S_SELECT_SET,
+                               c_ptrTo(c_offset), nil,
+                               c_ptrTo(c_shape), nil);
+
+    C_HDF5.H5Dread(dset_id, dtype_id, mspace_id, dspace_id,
+                   C_HDF5.H5P_DEFAULT, c_ptrTo(arr[arr.domain.low]));
   }
 
   /* Read part of a dataset from a HDF5 file.
@@ -60,6 +146,7 @@ module HDF5 {
   /* Read part of a dataset from a HDF5 file. This function modifies `array` inplace.
    * 
    */
+  /*
   proc readDatasetChunk(filename : string, dataset : string, offset, ref array : [] ?eltType)
       where isTuple(offset) && offset.size == array.rank {
     const rank = offset.size;
@@ -81,6 +168,7 @@ module HDF5 {
       halt("readDatasetChunk does not support " + eltType:string);
     }
   }
+  */
 
   /* Create an HDF5 dataset of given shape and data type.
    *
@@ -135,7 +223,6 @@ module HDF5 {
     var states : [dom] uint(64);
     coforall loc in Locales do on loc {
       const indices = states.localSubdomain();
-      // logDebug("my subdomain: " + indices:string);
       readDatasetChunk(filename, dataset, (indices.low,), states[indices]);
     }
     return states;
@@ -154,7 +241,6 @@ module HDF5 {
     var vectors : [dom] eltType;
     coforall loc in Locales do on loc {
       const indices = vectors.localSubdomain();
-      // logDebug("my subdomain: " + indices:string);
       readDatasetChunk(filename, dataset, indices.low, vectors[indices]);
     }
     return vectors;

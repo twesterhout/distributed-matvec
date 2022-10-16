@@ -158,10 +158,63 @@ module Diagonalize {
   }
 
   config const input : string = "data/heisenberg_chain_10.yaml";
+  config const output : string = "exact_diagonalization_output.h5";
   config const numEvals : int = 1;
   config const maxBlockSize : int = 1;
   config const eps : real = 1e-6;
 
+  proc configurePrimme(ref params, dimension, matrix, basisStates) {
+      params.n = dimension;
+      params.matrixMatvec = c_ptrTo(ls_chpl_primme_matvec);
+      params.numEvals = numEvals:c_int;
+      params.target = primme_smallest;
+      params.eps = eps;
+
+      params.numProcs = numLocales:c_int;
+      params.procID = here.id:c_int;
+      params.nLocal = basisStates.size;
+      params.globalSumReal = c_ptrTo(primmeGlobalSumReal);
+      params.globalSumReal_type = primme_op_double;
+      params.broadcastReal = c_ptrTo(primmeBroadcastReal);
+      params.broadcastReal_type = primme_op_double;
+
+      // params.initSize = ;
+      // params.maxBasisSize = ;
+      // params.minRestartSize = ;
+      params.maxBlockSize = maxBlockSize:c_int;
+
+      // params.commInfo = ;
+      params.matrix = matrix.payload;
+      // params.massMatrix = ;
+      // params.preconditioner = ;
+      // params.convtest = ;
+      // params.monitor = ;
+
+      // params.ldevecs = ;
+      // params.numOrthoConst = ;
+      // params.dynamicMethodSwitch = ;
+      // params.locking = ;
+      // params.maxMatvecs = ;
+      // params.maxOuterIterations = ;
+      // params.iseed = ;
+      // params.aNorm = ;
+      // params.BNorm = ;
+      // params.invBNorm = ;
+      params.printLevel = 5;
+      // params.outputFile = ;
+      // params.ShiftsForPreconditioner = ;
+      // params.initBasisMode = ;
+      // params.projectionParams = ;
+      // params.restartingParams = ;
+      // params.correctionParams = ;
+      // params.stats = ;
+      // params.convTestFun = ;
+      // params.ldOPs = ;
+      // params.monitorFun = ;
+      // params.orth = ;
+
+      primme_set_method(PRIMME_DEFAULT_MIN_MATVECS, params);
+  }
 
   proc main() {
     initRuntime();
@@ -183,6 +236,7 @@ module Diagonalize {
     // Build the basis
     const masks;
     const basisStates = enumerateStates(basis, masks);
+    const dimension = + reduce basisStates.counts;
 
     // Allocate space for eigenvectors
     var evecs = new BlockVector(real(64), numEvals, basisStates.counts);
@@ -205,32 +259,7 @@ module Diagonalize {
       primme_initialize(params);
       defer primme_free(params);
 
-      params.matrix = myMatrix.payload;
-      params.matrixMatvec = c_ptrTo(ls_chpl_primme_matvec);
-      params.maxBlockSize = maxBlockSize:c_int;
-      params.n = + reduce basisStates.counts;
-      params.numEvals = numEvals:c_int;
-      params.eps = eps;
-      params.target = primme_smallest;
-
-      params.numProcs = numLocales:int(32);
-      params.procID = loc.id:int(32);
-      params.nLocal = myBasisStates.size;
-      params.globalSumReal = c_ptrTo(primmeGlobalSumReal);
-      params.globalSumReal_type = primme_op_double;
-      params.broadcastReal = c_ptrTo(primmeBroadcastReal);
-      params.broadcastReal_type = primme_op_double;
-
-      params.printLevel = 5;
-
-      primme_set_method(PRIMME_DEFAULT_MIN_MATVECS, params);
-      // primme_display_params(params);
-
-      // allLocalesBarrier.barrier();
-
-      // writeln(here, ": calling dprimme ...");
-      allLocalesBarrier.barrier();
-
+      configurePrimme(params, dimension, myMatrix, myBasisStates);
       const ierr = dprimme(c_ptrTo(myEvals),
                            c_ptrTo(myEvecs[myEvecs.domain.low]),
                            c_ptrTo(myResNorms),
