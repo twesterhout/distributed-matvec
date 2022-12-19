@@ -6,10 +6,12 @@ module MyHDF5 {
 
   use LatticeSymmetries.FFI;
 
+  /*
   proc datasetRank(filename : string, dataset : string) {
     return ls_hs_hdf5_get_dataset_rank(
       filename.localize().c_str(), dataset.localize().c_str()):int;
   }
+  */
 
   /* Get shape of a dataset in a HDF5 file.
    *
@@ -19,7 +21,7 @@ module MyHDF5 {
    * :returns: shape of the dataset as a one-dimensional array.
    * :rtype: [] int
    */
-  proc datasetShape(filename : string, dataset : string) {
+  proc datasetShape(filename : string, dataset : string, param rank : int) : rank * int {
     const file_id = C_HDF5.H5Fopen(filename.localize().c_str(),
                                    C_HDF5.H5F_ACC_RDONLY, C_HDF5.H5P_DEFAULT);
     defer C_HDF5.H5Fclose(file_id);
@@ -30,24 +32,38 @@ module MyHDF5 {
     const dspace_id = C_HDF5.H5Dget_space(dset_id);
     defer C_HDF5.H5Sclose(dspace_id);
 
-    const rank = C_HDF5.H5Sget_simple_extent_ndims(dspace_id);
+    const dset_rank = C_HDF5.H5Sget_simple_extent_ndims(dspace_id);
+    if dset_rank != rank then
+      halt("expected '" + dataset + "' to be " + rank:string +
+           "-dimensional, but it has rank " + dset_rank:string);
     var c_shape : [0 ..# rank] C_HDF5.hsize_t;
-    H5Sget_simple_extent_dims(dspace_id, c_ptrTo(c_shape), nil);
+    C_HDF5.H5Sget_simple_extent_dims(dspace_id, c_ptrTo(c_shape), nil);
 
-    return c_shape:int;
+    return _asTuple(c_shape, rank):(rank * int);
   }
 
-  private inline proc _makeDomain(shape : 1 * int) : domain(1) {
-    return {0 ..# shape[0]};
+  inline proc _domainFromTuple((a,) : 1 * range) : domain(1) { return { a }; }
+  inline proc _domainFromTuple((a, b) : 2 * range) : domain(2) { return { a, b }; }
+  inline proc _domainFromTuple((a, b, c) : 3 * range) : domain(3) { return { a, b, c }; }
+  inline proc _domainFromTuple((a, b, c, d) : 4 * range) : domain(4) { return { a, b, c, d }; }
+
+  private inline proc _rangesFromShape(shape) {
+    param rank = shape.size;
+    var ranges : rank * range;
+    for (r, n) in zip(ranges, shape) do
+      r = 0 ..# n;
+    return ranges;
   }
-  private inline proc _makeDomain(shape : 2 * int) : domain(2) {
-    return {0 ..# shape[0], 0 ..# shape[1]};
+
+  private inline proc _makeDomain(shape) where isTuple(shape) {
+    return _domainFromTuple(_rangesFromShape(shape));
   }
-  private inline proc _makeDomain(shape : 3 * int) : domain(3) {
-    return {0 ..# shape[0], 0 ..# shape[1], 0 ..# shape[2]};
-  }
-  private inline proc _makeDomain(shape : 4 * int) : domain(3) {
-    return {0 ..# shape[0], 0 ..# shape[1], 0 ..# shape[2], 0 ..# shape[3]};
+
+  private inline proc _asTuple(xs : [] ?eltType, param rank : int) {
+    var ys : rank * eltType;
+    for (y, x) in zip(ys, xs) do
+      y = x;
+    return ys;
   }
 
   proc readDataset(filename : string, dataset : string, type eltType, param rank : int) {
@@ -62,9 +78,9 @@ module MyHDF5 {
     defer C_HDF5.H5Sclose(dspace_id);
 
     const datasetRank = C_HDF5.H5Sget_simple_extent_ndims(dspace_id);
-    if arr.rank != datasetRank then
+    if rank != datasetRank then
       halt("rank mismatch in file: '" + filename + "' dataset: '" + dataset +
-           "'  " + arr.rank:string + " != " + datasetRank:string);
+           "'  " + rank:string + " != " + datasetRank:string);
 
     const dtype_id = C_HDF5.H5Dget_type(dset_id);
     defer C_HDF5.H5Tclose(dtype_id);
@@ -72,10 +88,10 @@ module MyHDF5 {
       halt("type mismatch in file: '" + filename + "' dataset: '" + dataset +
            "'  " + HDF5.getHDF5Type(eltType):string + " != " + dtype_id:string);
   
-    var c_shape : [0 ..# arr.rank] C_HDF5.hsize_t;
-    H5Sget_simple_extent_dims(dspace_id, c_ptrTo(c_shape), nil);
+    var c_shape : [0 ..# rank] C_HDF5.hsize_t;
+    C_HDF5.H5Sget_simple_extent_dims(dspace_id, c_ptrTo(c_shape), nil);
 
-    const mspace_id = C_HDF5.H5Screate_simple(arr.rank, c_ptrTo(c_shape), nil);
+    const mspace_id = C_HDF5.H5Screate_simple(rank, c_ptrTo(c_shape), nil);
     defer C_HDF5.H5Sclose(mspace_id);
 
     var arr : [_makeDomain(c_shape:int)] eltType;
@@ -173,6 +189,7 @@ module MyHDF5 {
   /* Create an HDF5 dataset of given shape and data type.
    *
    */
+  /*
   proc createHDF5Dataset(filename : string, dataset : string, type eltType, shape) {
     assert(filename.locale == here && dataset.locale == here);
     var c_shape : [0 .. shape.size - 1] uint(64) = noinit;
@@ -189,9 +206,11 @@ module MyHDF5 {
       assert(false);
     }
   }
+  */
 
   /* Write array to a HDF5 dataset.
    */
+  /*
   proc writeHDF5Chunk(filename : string, dataset : string, offset, array : [?D] ?eltType)
       where isTuple(offset) && offset.size == D.rank {
     assert(D.rank == offset.size);
@@ -211,7 +230,9 @@ module MyHDF5 {
       assert(false);
     }
   }
+  */
 
+  /*
   proc readBasisStatesAsBlocks(filename : string, dataset : string) {
     const shape = datasetShape(filename, dataset);
     if shape.size != 1 then
@@ -227,21 +248,20 @@ module MyHDF5 {
     }
     return states;
   }
+  */
 
-  proc readVectorsAsBlocks(filename : string, dataset : string, type eltType = real(64)) {
-    const shape = datasetShape(filename, dataset);
-    if shape.size != 2 then
-      halt("expected '" + dataset + "' to be two-dimensional, but it has shape " + shape:string);
-    const numberVectors = shape[0];
-    const totalNumberStates = shape[1];
+  proc readDatasetAsBlocks(filename : string, dataset : string, param rank = 2, type eltType = real(64)) {
+    const shape = datasetShape(filename, dataset, rank);
   
-    const boundingBox = {0 ..# numberVectors, 0 ..# totalNumberStates};
-    const targetLocales = reshape(Locales, {0 ..# 1, 0 ..# numLocales});
+    const boundingBox = _makeDomain(shape);
+    const targetLocales = if rank == 1 then Locales
+                                       else reshape(Locales, {0 ..# 1, 0 ..# numLocales});
     const dom = boundingBox dmapped Block(boundingBox, targetLocales);
     var vectors : [dom] eltType;
     coforall loc in Locales do on loc {
       const indices = vectors.localSubdomain();
-      readDatasetChunk(filename, dataset, indices.low, vectors[indices]);
+      const offset = if rank == 1 then (indices.low,) else indices.low;
+      readDatasetChunk(filename, dataset, offset, vectors[indices]);
     }
     return vectors;
   }

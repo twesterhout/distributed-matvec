@@ -50,33 +50,6 @@ module ForeignTypes {
 
     proc json_repr const ref : string { return _json_repr; }
 
-    /*
-    proc chpl__serialize() {
-      logDebug("Calling chpl__serialize(" + this.locale:string + ") ...");
-      return (this.locale.id, payload:c_void_ptr);
-      // // assert(here == this.locale);
-      // var json_string : string;
-      // on this.locale {
-      //   logDebug("Serializing ...");
-      //   json_string = this.toJSON();
-      // }
-      // return json_string;
-    }
-
-    proc type chpl__deserialize(data) {
-      const (loc, payload) = data;
-      logDebug("Calling chpl__deserialize(" + data:string + ") ...");
-      var json_string : string;
-      on Locales[loc] {
-        // logDebug("To JSON ...");
-        const c_str = ls_hs_basis_to_json(payload:c_ptr(ls_hs_basis));
-        defer ls_hs_destroy_string(c_str);
-        json_string = c_str:string;
-      }
-      return new Basis(json_string);
-    }
-    */
-
     proc _destroy() {
       if owning then
         ls_hs_destroy_basis_v2(payload);
@@ -135,38 +108,6 @@ module ForeignTypes {
     lhs._origin = rhs._origin;
     lhs._json_repr = rhs._json_repr;
   }
-
-  // proc loadBasisFromYaml(filename : string) {
-  //   var ptr = ls_hs_create_spin_basis_from_yaml(filename.localize().c_str());
-  //   if ptr == nil then
-  //     halt("failed to load Basis from " + filename);
-  //   return new Basis(ptr);
-  // }
-
-  // proc SpinBasis(json : string) {
-  //   return new Basis(ls_hs_create_spin_basis_from_json(json.localize().c_str()));
-  // }
-  // proc SpinBasis(numberSites : int, hammingWeight : int = -1) {
-  //   var json  = "{ \"number_spins\": " + numberSites:string;
-  //   if hammingWeight != -1 then
-  //     json += ", \"hamming_weight\": " + hammingWeight:string;
-  //   json += " }";
-  //   return SpinBasis(json);
-  //   // return new Basis(ls_hs_create_basis(LS_HS_SPIN, numberSites:c_int, 
-  //   //                                     numberSites:c_int, hammingWeight:c_int));
-  // }
-  // proc SpinlessFermionicBasis(numberSites : int, numberParticles : int = -1) {
-  //   return new Basis(ls_hs_create_basis(LS_HS_SPINLESS_FERMION, numberSites:c_int,
-  //                                       numberParticles:c_int, -1));
-  // }
-  // proc SpinfulFermionicBasis(numberSites : int, numberParticles : int = -1) {
-  //   return new Basis(ls_hs_create_basis(LS_HS_SPINFUL_FERMION, numberSites:c_int,
-  //                                       numberParticles:c_int, -1));
-  // }
-  // proc SpinfulFermionicBasis(numberSites : int, numberUp : int, numberDown : int) {
-  //   return new Basis(ls_hs_create_basis(LS_HS_SPINFUL_FERMION, numberSites:c_int,
-  //                                       (numberUp + numberDown):c_int, numberUp:c_int));
-  // }
 
   proc isRepresentative(const ref basis : Basis, const ref alphas : [?D] uint(64),
                         ref are_representatives : [?D2] uint(8),

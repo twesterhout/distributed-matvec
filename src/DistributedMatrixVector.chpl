@@ -14,7 +14,7 @@ use FFI;
 use ForeignTypes;
 use ConcurrentAccessor;
 use BatchedOperator;
-use CommunicationQueue;
+// use CommunicationQueue;
 
 config const kVerboseComm : bool = false; 
 config const kVerboseGetTiming : bool = false; 
@@ -70,6 +70,47 @@ private proc localDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y :
   }
 }
 
+private proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(ConcurrentAccessor(?coeffType)),
+                          basisStates : c_ptr(uint(64)), coeffs : c_ptr(?t), size : int) {
+  var timer = new Timer();
+  timer.start();
+  var allocateTimer = new Timer();
+  var indexingTimer = new Timer();
+  var accessTimer = new Timer();
+  local {
+    // count == 0 has to be handled separately because c_ptrTo(indices) fails
+    // when the size of indices is 0.
+    if size == 0 then return (0, 0, 0, 0);
+
+    allocateTimer.start();
+    var indices : [0 ..# size] int = noinit;
+    allocateTimer.stop();
+
+    indexingTimer.start();
+    ls_hs_state_index(basisPtr.deref().payload, size, basisStates, 1, c_ptrTo(indices[0]), 1);
+    indexingTimer.stop();
+
+    accessTimer.start();
+    ref accessor = accessorPtr.deref();
+    foreach k in 0 ..# size {
+      const i = indices[k];
+      const c = coeffs[k]:coeffType;
+      // Importantly, the user could have made a mistake and given us an
+      // operator which does not respect the basis symmetries. Then we could
+      // have that a |σ⟩ was generated that doesn't belong to our basis. In
+      // this case, we should throw an error.
+      if i >= 0 then accessor.localAdd(i, c);
+                else halt("invalid index");
+    }
+    accessTimer.stop();
+  }
+  timer.stop();
+  return (timer.elapsed(), allocateTimer.elapsed(),
+          indexingTimer.elapsed(), accessTimer.elapsed());
+}
+
+
+/*
 var globalPtrStore : [LocaleSpace] (c_ptr(Basis), c_ptr(ConcurrentAccessor(real(64))));
 
 private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y : [] eltType,
@@ -168,6 +209,7 @@ private proc localOffDiagonal(matrix : Operator, const ref x : [] ?eltType, ref 
            "  │                   └─ ", queue.localProcessTimeRemote, " in localProcess on remote\n",
            "  └─ ", queueDrainTime, " in queue.drain\n");
 }
+*/
 
 record PartitionInfo {
     var _countOrOffset : int;
@@ -1002,10 +1044,10 @@ proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] 
   assert(y.locale == here);
   assert(representatives.locale == here);
   localDiagonal(matrix, x, y, representatives);
-  if kUseQueue then
-    localOffDiagonal(matrix, x, y, representatives);
-  else
-    localOffDiagonalNoQueue(matrix, x, y, representatives);
+  // if kUseQueue then
+  //   localOffDiagonal(matrix, x, y, representatives);
+  // else
+  localOffDiagonalNoQueue(matrix, x, y, representatives);
 }
 
 proc matrixVectorProduct(matrixFilename : string,

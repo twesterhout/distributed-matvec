@@ -139,23 +139,24 @@ module FFI {
     }
   }
 
-  extern proc ls_hs_create_basis(particleType : ls_hs_particle_type, numberSites : c_int,
-                                 numberParticles : c_int, numberUp : c_int) : c_ptr(ls_hs_basis);
+  // extern proc ls_hs_create_basis(particleType : ls_hs_particle_type, numberSites : c_int,
+  //                                numberParticles : c_int, numberUp : c_int) : c_ptr(ls_hs_basis);
   extern proc ls_hs_clone_basis(basis : c_ptr(ls_hs_basis)) : c_ptr(ls_hs_basis);
   extern proc ls_hs_destroy_basis_v2(basis : c_ptr(ls_hs_basis));
   extern proc ls_hs_min_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
   extern proc ls_hs_max_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
   extern proc ls_hs_basis_number_bits(basis : c_ptr(ls_hs_basis)) : c_int;
   extern proc ls_hs_basis_number_words(basis : c_ptr(ls_hs_basis)) : c_int;
+  extern proc ls_hs_basis_has_fixed_hamming_weight(basis : c_ptr(ls_hs_basis)) : bool;
 
   extern proc ls_hs_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
   extern proc ls_hs_basis_to_json(basis : c_ptr(ls_hs_basis)) : c_string;
   extern proc ls_hs_destroy_string(str : c_string);
 
-  extern proc ls_hs_create_spin_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
-  extern proc ls_hs_create_spin_basis_from_yaml(yaml_filename : c_string) : c_ptr(ls_hs_basis);
-  extern proc ls_hs_create_spinful_fermion_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
-  extern proc ls_hs_create_spinless_fermion_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
+  // extern proc ls_hs_create_spin_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
+  // extern proc ls_hs_create_spin_basis_from_yaml(yaml_filename : c_string) : c_ptr(ls_hs_basis);
+  // extern proc ls_hs_create_spinful_fermion_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
+  // extern proc ls_hs_create_spinless_fermion_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
 
   extern proc ls_hs_fixed_hamming_state_to_index(basis_state : uint(64)) : c_ptrdiff;
   extern proc ls_hs_fixed_hamming_index_to_state(state_index : c_ptrdiff, hamming_weight : c_int) : uint(64);
@@ -224,7 +225,6 @@ module FFI {
     alphas : c_ptr(uint(64)), alphas_stride : c_ptrdiff, state_vector : c_void_ptr,
     element_size : uint(64), coeffs : c_void_ptr);
 
-  extern proc ls_hs_basis_has_fixed_hamming_weight(basis : c_ptr(ls_hs_basis)) : bool;
 
   extern record ls_chpl_kernels {
     var enumerate_states : c_fn_ptr;
@@ -234,24 +234,20 @@ module FFI {
   }
   extern proc ls_hs_internal_set_chpl_kernels(kernels : c_ptr(ls_chpl_kernels));
 
-
-  require "helper.h";
-  extern proc print_external_string(s : c_string);
-
-
-  extern proc ls_hs_hdf5_get_dataset_rank(path: c_string, dataset: c_string):c_uint;
-  extern proc ls_hs_hdf5_get_dataset_shape(path: c_string, dataset: c_string,
-                                           shape: c_ptr(uint(64)));
-  extern proc ls_hs_hdf5_create_dataset_u64(path: c_string,
-      dataset: c_string, dim: c_uint, shape: c_ptr(uint(64)));
-  extern proc ls_hs_hdf5_create_dataset_f64(path: c_string,
-      dataset: c_string, dim: c_uint, shape: c_ptr(uint(64)));
-  extern proc ls_hs_hdf5_write_chunk_u64(path: c_string, dataset: c_string,
-      dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(uint(64)));
-  extern proc ls_hs_hdf5_write_chunk_f64(path: c_string, dataset: c_string,
-      dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(real(64)));
-  extern proc ls_hs_hdf5_read_chunk_u64(path: c_string, dataset: c_string,
-      dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(uint(64)));
-  extern proc ls_hs_hdf5_read_chunk_f64(path: c_string, dataset: c_string,
-      dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(real(64)));
+  // extern proc print_external_string(s : c_string);
+  // extern proc ls_hs_hdf5_get_dataset_rank(path: c_string, dataset: c_string):c_uint;
+  // extern proc ls_hs_hdf5_get_dataset_shape(path: c_string, dataset: c_string,
+  //                                          shape: c_ptr(uint(64)));
+  // extern proc ls_hs_hdf5_create_dataset_u64(path: c_string,
+  //     dataset: c_string, dim: c_uint, shape: c_ptr(uint(64)));
+  // extern proc ls_hs_hdf5_create_dataset_f64(path: c_string,
+  //     dataset: c_string, dim: c_uint, shape: c_ptr(uint(64)));
+  // extern proc ls_hs_hdf5_write_chunk_u64(path: c_string, dataset: c_string,
+  //     dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(uint(64)));
+  // extern proc ls_hs_hdf5_write_chunk_f64(path: c_string, dataset: c_string,
+  //     dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(real(64)));
+  // extern proc ls_hs_hdf5_read_chunk_u64(path: c_string, dataset: c_string,
+  //     dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(uint(64)));
+  // extern proc ls_hs_hdf5_read_chunk_f64(path: c_string, dataset: c_string,
+  //     dim: c_uint, offset: c_ptr(uint(64)), shape: c_ptr(uint(64)), data: c_ptr(real(64)));
 }

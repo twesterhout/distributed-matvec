@@ -16,19 +16,20 @@ HDF5_CFLAGS = $(shell pkg-config --cflags hdf5)
 HDF5_LIBS = -lhdf5_hl $(shell pkg-config --libs hdf5)
 
 # MODULES = src/ApplyOperator.chpl src/StatesEnumeration.chpl src/helper.c
-MODULES = src/LatticeSymmetries.chpl \
-	  src/FFI.chpl \
-	  src/MyHDF5.chpl \
-	  src/ForeignTypes.chpl \
-	  src/StatesEnumeration.chpl \
-	  src/ConcurrentAccessor.chpl \
-	  src/BatchedOperator.chpl \
-	  src/CommunicationQueue.chpl \
-	  src/DistributedMatrixVector.chpl \
-	  src/MultiwayMerge.chpl \
-	  src/Vector.chpl \
-	  src/CommonParameters.chpl \
-	  src/helper.c
+LIB_MODULES = src/LatticeSymmetries.chpl \
+              src/FFI.chpl \
+              src/ForeignTypes.chpl \
+              src/Vector.chpl \
+              src/ConcurrentAccessor.chpl \
+              src/StatesEnumeration.chpl \
+              src/BatchedOperator.chpl \
+              src/DistributedMatrixVector.chpl \
+              src/CommonParameters.chpl
+
+APP_MODULES = $(LIB_MODULES) \
+	      src/HashedToBlock.chpl \
+	      src/BlockToHashed.chpl \
+	      src/MyHDF5.chpl
 
 .PHONY: all
 all: examples
@@ -97,35 +98,35 @@ data/large-scale:
 
 lib: lib/liblattice_symmetries_chapel.so
 
-lib/liblattice_symmetries_chapel.so: $(MODULES)
+lib/liblattice_symmetries_chapel.so: $(LIB_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) --library --dynamic -o lattice_symmetries_chapel $^ $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) --library --static -o lattice_symmetries_chapel $^ $(HDF5_LIBS) $(LDFLAGS)
 
-bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(MODULES)
-	@mkdir -p $(@D)
-	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
-
-bin/TestMatrixVectorProduct: test/TestMatrixVectorProduct.chpl $(MODULES)
+bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 
-bin/Example01: example/Example01.chpl $(MODULES)
+bin/TestMatrixVectorProduct: test/TestMatrixVectorProduct.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
 
-bin/Example02: example/Example02.chpl $(MODULES)
+bin/Example01: example/Example01.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
 
-bin/Example03: example/Example03.chpl $(MODULES)
+bin/Example02: example/Example02.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
 
-bin/Example04: example/Example04.chpl $(MODULES)
+bin/Example03: example/Example03.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
 
-bin/Example05: example/Example05.chpl $(MODULES)
+bin/Example04: example/Example04.chpl $(APP_MODULES)
+	@mkdir -p $(@D)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
+
+bin/Example05: example/Example05.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS) 
 
@@ -137,7 +138,7 @@ bin/primme: src/PRIMME.chpl
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) $(PRIMME_CFLAGS) -o $@ $< $(PRIMME_LDFLAGS)
 
-bin/Diagonalize: src/Diagonalize.chpl src/PRIMME.chpl $(MODULES)
+bin/Diagonalize: src/Diagonalize.chpl src/PRIMME.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) $(PRIMME_CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS) $(PRIMME_LDFLAGS)
 

@@ -1,17 +1,10 @@
 module Vector {
 
+use FFI;
 // TODO: probably shouldn't use it...
 use ArrayViewSlice;
 use BlockDist;
 use CTypes;
-
-private inline proc GET(addr, node, rAddr, size) {
-  __primitive("chpl_comm_get", addr, node, rAddr, size);
-}
-
-private inline proc PUT(addr, node, rAddr, size) {
-  __primitive("chpl_comm_put", addr, node, rAddr, size);
-}
 
 record Vector {
   type eltType;
@@ -58,7 +51,7 @@ record Vector {
     reserve(newCapacity);
   }
 
-  proc pushBack(x : eltType) {
+  inline proc pushBack(x : eltType) {
     if _size == _dom.size then
       defaultGrow();
     _arr[_size] = x;
@@ -98,9 +91,6 @@ record Vector {
 }
 
 proc isVector(type x : Vector) param { return true; }
-// proc isVector(type x : shared Vector) param { return true; }
-// proc isVector(type x : borrowed Vector) param { return true; }
-// proc isVector(type x : unmanaged Vector) param { return true; }
 proc isVector(type x) param { return false; }
 
 proc _getDataPtrs(type eltType, const ref counts, ref data) {

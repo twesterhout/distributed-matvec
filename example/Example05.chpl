@@ -1,4 +1,7 @@
 use LatticeSymmetries;
+use HashedToBlock;
+use BlockToHashed;
+use MyHDF5;
 use Time;
 
 proc localLoadVectors(filename : string, x : string = "/x", y : string = "/y") {
@@ -66,7 +69,7 @@ proc main() {
 
   timer.clear();
   timer.start();
-  const xBlock = readVectorsAsBlocks(kVectors, "/x");
+  const xBlock = readDatasetAsBlocks(kVectors, "/x");
   timer.stop();
   logDebug("Reading X took ", timer.elapsed());
 
@@ -100,7 +103,7 @@ proc main() {
   matrixVectorProduct(kHamiltonian, x, z, basisStates);
 
   const zBlock = arrFromHashedToBlock(z, masks);
-  const yBlock = readVectorsAsBlocks(kVectors, "/y");
+  const yBlock = readDatasetAsBlocks(kVectors, "/y");
   // const y = vectorsFromBlockToHashed(basisStatesRaw, yRaw);
   // writeln("y: ", yRaw);
   // writeln("z: ", zRaw);

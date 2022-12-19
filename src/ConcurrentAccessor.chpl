@@ -4,7 +4,7 @@ use FFI;
 use CTypes;
 use ChapelLocks;
 
-config const concurrentAccessorNumLocks = 5 * here.maxTaskPar;
+// config const concurrentAccessorNumLocks = 5 * here.maxTaskPar;
 
 // A simple wrapper around an array `y` which synchronizes accesses. The only
 // operation which is allowed is `y[i] += x` <-> `accessor.localAdd(i, x)`. We use
@@ -20,7 +20,7 @@ record ConcurrentAccessor {
   // var numLocks : int;
   // var _locks : [0 ..# numLocks] chpl_LocalSpinlock;
 
-  proc init(ref arr : [] ?t, in numLocks : int = concurrentAccessorNumLocks)
+  proc init(ref arr : [] ?t)
       where !arr.domain.stridable && arr.domain.rank == 1 {
     if arr.locale != here then
       halt("ConcurrentAccessor can only be constructed around a local array");
