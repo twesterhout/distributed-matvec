@@ -1,4 +1,5 @@
 use LatticeSymmetries;
+use MyHDF5;
 use Time;
 
 proc localLoadRepresentatives(filename : string, dataset : string = "/representatives") {
@@ -13,13 +14,12 @@ proc main() {
   defer deinitRuntime();
 
   const reference = localLoadRepresentatives(kRepresentatives);
-  var matrix = loadHamiltonianFromYaml(kHamiltonian);
-  ref basis = matrix.basis;
+  const basis = loadConfigFromYaml(kHamiltonian);
 
   var masks;
   const states = enumerateStates(basis, masks);
-  for loc in Locales do
-    writeln(states[loc]);
+  // for loc in Locales do
+  //   writeln(states[loc]);
 
   if numLocales > 1 then return 0;
 

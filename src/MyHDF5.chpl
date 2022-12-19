@@ -94,7 +94,7 @@ module MyHDF5 {
     const mspace_id = C_HDF5.H5Screate_simple(rank, c_ptrTo(c_shape), nil);
     defer C_HDF5.H5Sclose(mspace_id);
 
-    var arr : [_makeDomain(c_shape:int)] eltType;
+    var arr : [_makeDomain(_asTuple(c_shape, rank):(rank * int))] eltType;
     C_HDF5.H5Dread(dset_id, dtype_id, mspace_id, dspace_id,
                    C_HDF5.H5P_DEFAULT, c_ptrTo(arr[arr.domain.low]));
     return arr;

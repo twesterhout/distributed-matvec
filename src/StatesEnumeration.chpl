@@ -138,7 +138,8 @@ private proc _enumStatesComputeMasksAndCounts(const ref states, ref outMasks) {
 
   outMasks.resize(totalCount);
   if numLocales == 1 { // all data belongs to locale 0
-    c_memset(outMasks.data, 0, totalCount:c_size_t * c_sizeof(outMasks.eltType));
+    if totalCount > 0 then
+      c_memset(outMasks.data, 0, totalCount:c_size_t * c_sizeof(outMasks.eltType));
     counts[0] = totalCount;
   }
   else {

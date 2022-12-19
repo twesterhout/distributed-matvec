@@ -59,10 +59,10 @@ benchmark-states-enumeration: bin/TestStatesEnumeration data/large-scale
 
 .PHONY: check-states-enumeration
 check-states-enumeration: bin/TestStatesEnumeration data/construction
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_chain_10.yaml --kRepresentatives data/construction/heisenberg_chain_10.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_12.yaml --kRepresentatives data/construction/heisenberg_kagome_12.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_16.yaml --kRepresentatives data/construction/heisenberg_kagome_16.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/old/heisenberg_square_4x4.yaml --kRepresentatives data/construction/heisenberg_square_4x4.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_10.yaml --kRepresentatives data/matvec/heisenberg_chain_10.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_12.yaml --kRepresentatives data/matvec/heisenberg_kagome_12.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_12_symm.yaml --kRepresentatives data/matvec/heisenberg_kagome_12_symm.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_16.yaml --kRepresentatives data/matvec/heisenberg_kagome_16.h5
 
 .PHONY: benchmark-matrix-vector-product
 benchmark-matrix-vector-product: bin/TestMatrixVectorProduct data/large-scale
@@ -104,11 +104,11 @@ lib/liblattice_symmetries_chapel.so: $(LIB_MODULES)
 
 bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
 
 bin/TestMatrixVectorProduct: test/TestMatrixVectorProduct.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
 
 bin/Example01: example/Example01.chpl $(APP_MODULES)
 	@mkdir -p $(@D)

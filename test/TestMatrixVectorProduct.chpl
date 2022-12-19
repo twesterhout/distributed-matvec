@@ -1,4 +1,7 @@
 use LatticeSymmetries;
+use MyHDF5;
+use HashedToBlock;
+use BlockToHashed;
 use Time;
 
 proc localLoadVectors(filename : string, x : string = "/x", y : string = "/y") {
@@ -20,32 +23,37 @@ proc approxEqual(a : [], b : [], atol = kAbsTol, rtol = kRelTol) {
 }
 
 proc main() {
-  ls_hs_init();
+  initRuntime();
+  defer deinitRuntime();
 
-  var matrix = loadHamiltonianFromYaml(kHamiltonian);
-  matrix.basis.build();
-  const (x, y) = localLoadVectors(kVectors);
-  var z : x.type;
+  const (_, matrix) = loadConfigFromYaml(kHamiltonian, hamiltonian=true);
+
+  const masks;
+  const basisStates = enumerateStates(matrix.basis, masks);
+
+  const x = arrFromBlockToHashed(readDatasetAsBlocks(kVectors, "/x"), masks);
+
+  var z = similar(x);
 
   var timer = new Timer();
   timer.start();
-  localMatVec(matrix, x, z);
+  matrixVectorProduct(kHamiltonian, x, z, basisStates);
   timer.stop();
 
-  const closeEnough = && reduce approxEqual(y, z);
+  const yBlock = readDatasetAsBlocks(kVectors, "/y");
+  const zBlock = arrFromHashedToBlock(z, masks);
+
+  const closeEnough = && reduce approxEqual(yBlock, zBlock);
+  writeln(closeEnough);
   if (!closeEnough) {
     var maxErrorCount = 10;
-    for i in x.domain {
-      if !approxEqual(z[i], y[i]) && maxErrorCount > 0 {
-        writeln("at ", i, ": ", z[i], " != ", y[i]);
+    for i in yBlock.domain {
+      if !approxEqual(zBlock[i], yBlock[i]) && maxErrorCount > 0 {
+        writeln("at ", i, ": ", zBlock[i], " (computed) != ", yBlock[i], " (expected)");
         maxErrorCount -= 1;
       }
     }
   }
   assert(closeEnough);
   writeln(timer.elapsed());
-}
-
-proc deinit() {
-  ls_hs_exit();
 }
