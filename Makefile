@@ -15,6 +15,23 @@ PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -llapacke -lopenblas -lm -l
 HDF5_CFLAGS = $(shell pkg-config --cflags hdf5)
 HDF5_LIBS = -lhdf5_hl $(shell pkg-config --libs hdf5)
 
+ifeq ($(UNAME), Linux)
+  CONDA_CC ?= $(shell conda run -n ci_devel bash -c "which \$${CC}")
+  CONDA_PREFIX ?= $(shell conda run -n ci_devel bash -c "echo \$${CONDA_PREFIX}")
+  SHARED_EXT = so
+  SHARED_FLAG = -shared -rdynamic
+else
+  CONDA_CC = $(CC)
+  CONDA_PREFIX = 
+  SHARED_EXT = dylib
+  SHARED_FLAG = -dynamiclib
+endif
+
+PREFIX = $(PWD)
+PACKAGE = lattice-symmetries-chapel
+GIT_COMMIT = $(shell git rev-parse --short HEAD)
+DIST = $(PACKAGE)-$(GIT_COMMIT)
+
 # MODULES = src/ApplyOperator.chpl src/StatesEnumeration.chpl src/helper.c
 LIB_MODULES = src/LatticeSymmetries.chpl \
               src/FFI.chpl \
@@ -98,9 +115,32 @@ data/large-scale:
 
 lib: lib/liblattice_symmetries_chapel.so
 
-lib/liblattice_symmetries_chapel.so: $(LIB_MODULES)
+lib/liblattice_symmetries_chapel.a: $(LIB_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) $(HDF5_CFLAGS) --library --static -o lattice_symmetries_chapel $^ $(HDF5_LIBS) $(LDFLAGS)
+	chpl $(CFLAGS) --library --static -o lattice_symmetries_chapel $^ $(LDFLAGS)
+
+lib/liblattice_symmetries_chapel.so: lib/liblattice_symmetries_chapel.a
+	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c $^ $(LDFLAGS)
+# ifeq ($(UNAME), Darwin)
+# 	install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
+# endif
+
+.PHONY: release
+release: lib
+	mkdir -p $(DIST)/include
+	mkdir -p $(DIST)/lib
+	install -m644 -C third_party/include/*.h $(DIST)/include/
+	install -m644 -C third_party/lib/*.$(SHARED_EXT) $(DIST)/lib/
+	install -m644 -C lib/liblattice_symmetries_chapel.$(SHARED_EXT) $(DIST)/lib/
+ifeq ($(UNAME), Linux)
+	find $(DIST)/lib/ -name "*.$(SHARED_EXT)" -exec patchelf --set-rpath '$$ORIGIN' {} \;
+endif
+	tar -cf $(DIST).tar $(DIST)
+	bzip2 $(DIST).tar
+ifneq ($(realpath $(PREFIX)), $(PWD))
+	install -m644 -C $(DIST).tar.bz2 $(PREFIX)
+endif
+	rm -r $(DIST)
 
 bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
