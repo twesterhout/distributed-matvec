@@ -12,7 +12,6 @@ defaults:
 jobs:
   linux_tests:
     runs-on: ubuntu-latest
-    # latest
     container:
       image: chapel/chapel:1.29.0 # or chapel/chapel-gasnet-smp if you want multi-locale
     steps:
@@ -28,10 +27,13 @@ jobs:
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
         # patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
         ldd third_party/lib/liblattice_symmetries_haskell.so
+
     - name: Build
       run: |
+        echo $CHPL_HOME
         source env/setup-env-comm-none.sh
         make
+
     - uses: actions/cache@v3
       name: Cache test data
       with:
@@ -42,6 +44,7 @@ jobs:
     - name: Test
       run: |
         make check
+
     - name: Run examples
       run: |
         bin/Example01
