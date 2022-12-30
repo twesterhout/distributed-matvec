@@ -28,10 +28,17 @@ jobs:
         # patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
         ldd third_party/lib/liblattice_symmetries_haskell.so
 
+    - name: Build Chapel runtime
+      run: |
+        # echo "CHPL_HOME=${CHPL_HOME}"
+        source env/setup-env-comm-none.sh
+        $CHPL_HOME/util/chplenv/printchplbuilds.py
+        pushd $CHPL_HOME
+        make -j
+        popd
+
     - name: Build
       run: |
-        echo "CHPL_HOME=${CHPL_HOME}"
-        $CHPL_HOME/util/chplenv/printchplbuilds.py
         source env/setup-env-comm-none.sh
         make
 
