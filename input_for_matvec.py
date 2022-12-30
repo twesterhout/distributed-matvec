@@ -7,6 +7,7 @@ import yaml
 
 np.random.seed(42)
 
+
 def load_hamiltonian(filename: str):
     _, extension = os.path.splitext(filename)
     if extension != ".yaml" and extension != ".yml":
@@ -26,8 +27,10 @@ def generate(basis_filename: str, output_filename: str, batch_size: int = 1, ski
     tick = time.time()
     hamiltonian.basis.build()
     tock = time.time()
-    print("{} spent building the basis using OpenMP".format(tock - tick))
+    print("{}: {} spent building the basis using OpenMP".format(basis_filename, tock - tick))
     x = np.random.rand(hamiltonian.basis.number_states, batch_size) - 0.5
+    # x = np.zeros((hamiltonian.basis.number_states, batch_size))
+    # x[0] = 1.0
     if skip:
         return
 
@@ -35,7 +38,7 @@ def generate(basis_filename: str, output_filename: str, batch_size: int = 1, ski
     tick = time.time()
     y = hamiltonian(x)
     tock = time.time()
-    print("{} spent in matrix-vector using OpenMP".format(tock - tick))
+    print("{}: {} spent in matrix-vector using OpenMP".format(basis_filename, tock - tick))
 
     with h5py.File(output_filename, "w") as out:
         out["/representatives"] = hamiltonian.basis.states
@@ -44,22 +47,12 @@ def generate(basis_filename: str, output_filename: str, batch_size: int = 1, ski
 
 
 def main():
-    # generate("data/heisenberg_chain_10.yaml", "data/matvec/heisenberg_chain_10.h5", 1)
-    # generate("data/heisenberg_square_5x5.yaml", "data/matvec/heisenberg_square_5x5.h5", 1)
-    # generate("data/heisenberg_square_6x6.yaml", "data/matvec/heisenberg_square_6x6.h5", 1)
-    # generate("data/old/heisenberg_chain_20.yaml", "data/matvec/heisenberg_chain_20.h5", 1)
-    for i in [10, 12, 16, 20, 24]: # , 28, 32]:
+    for i in [4, 6, 8, 10, 12, 16, 20, 24]:  # , 28, 32]:
         generate(
             "data/old/heisenberg_chain_{}.yaml".format(i),
             "data/matvec/heisenberg_chain_{}.h5".format(i),
-            1,
-            skip=True if i > 16 else False
         )
-    # generate(
-    #     "data/old/heisenberg_chain_24_symm.yaml",
-    #     "data/matvec/heisenberg_chain_24_symm.h5",
-    #     skip=True
-    # )
+    generate("data/old/heisenberg_chain_24_symm.yaml", "data/matvec/heisenberg_chain_24_symm.h5")
     # generate(
     #     "data/old/heisenberg_chain_32_symm.yaml",
     #     "data/matvec/heisenberg_chain_32_symm.h5",
@@ -75,21 +68,12 @@ def main():
     #     "data/large-scale/matvec/heisenberg_chain_40_symm.h5",
     #     skip=True,
     # )
-    generate(
-        "data/old/heisenberg_kagome_12.yaml",
-        "data/matvec/heisenberg_kagome_12.h5",
-        skip=False
-    )
-    generate(
-        "data/old/heisenberg_kagome_16.yaml",
-        "data/matvec/heisenberg_kagome_16.h5",
-        skip=False
-    )
-    generate(
-        "data/old/heisenberg_kagome_12_symm.yaml",
-        "data/matvec/heisenberg_kagome_12_symm.h5",
-        skip=False
-    )
+    generate("data/old/heisenberg_kagome_12.yaml", "data/matvec/heisenberg_kagome_12.h5")
+    generate("data/old/heisenberg_kagome_12_symm.yaml", "data/matvec/heisenberg_kagome_12_symm.h5")
+    generate("data/old/heisenberg_kagome_16.yaml", "data/matvec/heisenberg_kagome_16.h5")
+    generate("data/old/heisenberg_square_4x4.yaml", "data/matvec/heisenberg_square_4x4.h5")
+    generate("data/old/heisenberg_square_5x5.yaml", "data/matvec/heisenberg_square_5x5.h5")
+    # generate("data/heisenberg_square_6x6.yaml", "data/matvec/heisenberg_square_6x6.h5", 1)
 
 
 if __name__ == "__main__":

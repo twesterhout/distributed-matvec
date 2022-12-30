@@ -61,7 +61,7 @@ private proc localDiagonal(matrix : Operator, const ref x : [] ?eltType, ref y :
                            numChunks : int = min(matrixVectorDiagonalNumChunks,
                                                  representatives.size)) {
   const totalSize = representatives.size;
-  const batchSize = (totalSize + numChunks - 1) / numChunks;
+  // const batchSize = (totalSize + numChunks - 1) / numChunks;
   var ranges : [0 ..# numChunks] range(int, BoundedRangeType.bounded, false) =
     chunks(0 ..# totalSize, numChunks);
   // var workspace : [0 ..# batchSize] complex(128) = noinit;
@@ -440,7 +440,6 @@ config const kRemoteBufferSize = 150000;
 config const kNumTasks = here.maxTaskPar;
 config const kNumConsumerTasks = 1;
 config const kVerbose = false;
-config const specialCase = false;
 config const kUseConsumer : bool = false;
 
 extern proc chpl_task_getId(): chpl_taskID_t;
@@ -1043,11 +1042,13 @@ proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] 
   assert(x.locale == here);
   assert(y.locale == here);
   assert(representatives.locale == here);
-  localDiagonal(matrix, x, y, representatives);
+  if matrix.numberDiagTerms() > 0 then
+    localDiagonal(matrix, x, y, representatives);
   // if kUseQueue then
   //   localOffDiagonal(matrix, x, y, representatives);
   // else
-  localOffDiagonalNoQueue(matrix, x, y, representatives);
+  if matrix.numberOffDiagTerms() > 0 then
+    localOffDiagonalNoQueue(matrix, x, y, representatives);
 }
 
 proc matrixVectorProduct(matrixFilename : string,

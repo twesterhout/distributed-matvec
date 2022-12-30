@@ -76,10 +76,20 @@ benchmark-states-enumeration: bin/TestStatesEnumeration
 
 .PHONY: check-states-enumeration
 check-states-enumeration: bin/TestStatesEnumeration
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_4.yaml --kRepresentatives data/matvec/heisenberg_chain_4.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_6.yaml --kRepresentatives data/matvec/heisenberg_chain_6.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_8.yaml --kRepresentatives data/matvec/heisenberg_chain_8.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_10.yaml --kRepresentatives data/matvec/heisenberg_chain_10.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_12.yaml --kRepresentatives data/matvec/heisenberg_chain_12.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_16.yaml --kRepresentatives data/matvec/heisenberg_chain_16.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_20.yaml --kRepresentatives data/matvec/heisenberg_chain_20.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_24.yaml --kRepresentatives data/matvec/heisenberg_chain_24.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_24_symm.yaml --kRepresentatives data/matvec/heisenberg_chain_24_symm.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_12.yaml --kRepresentatives data/matvec/heisenberg_kagome_12.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_12_symm.yaml --kRepresentatives data/matvec/heisenberg_kagome_12_symm.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_16.yaml --kRepresentatives data/matvec/heisenberg_kagome_16.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_square_4x4.yaml --kRepresentatives data/matvec/heisenberg_square_4x4.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_square_5x5.yaml --kRepresentatives data/matvec/heisenberg_square_5x5.h5
 
 .PHONY: benchmark-matrix-vector-product
 benchmark-matrix-vector-product: bin/TestMatrixVectorProduct
@@ -90,7 +100,16 @@ benchmark-matrix-vector-product: bin/TestMatrixVectorProduct
 .PHONY: check-matrix-vector-product
 check-matrix-vector-product: bin/TestMatrixVectorProduct
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_4.yaml --kVectors data/matvec/heisenberg_chain_4.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_6.yaml --kVectors data/matvec/heisenberg_chain_6.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_8.yaml --kVectors data/matvec/heisenberg_chain_8.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_10.yaml --kVectors data/matvec/heisenberg_chain_10.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_12.yaml --kVectors data/matvec/heisenberg_chain_12.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_16.yaml --kVectors data/matvec/heisenberg_chain_16.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_20.yaml --kVectors data/matvec/heisenberg_chain_20.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_24.yaml --kVectors data/matvec/heisenberg_chain_24.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_24_symm.yaml --kVectors data/matvec/heisenberg_chain_24_symm.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_12.yaml --kVectors data/matvec/heisenberg_kagome_12.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_12_symm.yaml --kVectors data/matvec/heisenberg_kagome_12_symm.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_16.yaml --kVectors data/matvec/heisenberg_kagome_16.h5
 
 

@@ -1,4 +1,4 @@
-# Heisenberg antiferromagnet on 12-site Kagome lattice with open boundary
+# Heisenberg antiferromagnet on 12-site Kagome lattice with periodic boundary
 # conditions
 basis:
   number_spins: 12
@@ -13,17 +13,25 @@ basis:
 hamiltonian:
   name: "Heisenberg Hamiltonian"
   terms:
-    #          10      11
-    #        6   7   8   9
-    #      4       5
-    #    0   1   2   3
+    #            0   1   2   3
+    #          10      11      10
+    #        6   7   8   9   6
+    #      4       5       4
+    #    0   1   2   3   0
     - matrix: [[0.25,  0,    0,     0],
                [0,    -0.25, 0.5,   0],
                [0,     0.5,  -0.25, 0],
                [0,     0,    0,     0.25]]
-      sites: [[0, 1], [0, 4], [1, 2], [1, 4], [2, 3], [2, 5], [3, 5],
-              [4, 6], [5, 7], [5, 8],
-              [6, 7], [6, 10], [7, 8], [7, 10], [8, 9], [8, 11], [9, 11]]
+      sites: [[0, 1], [0, 3], [0, 4], [0, 10],
+              [1, 2], [1, 4], [1, 11],
+              [2, 3], [2, 5], [2, 11],
+              [3, 5], [3, 10],
+              [4, 6], [4, 9],
+              [5, 7], [5, 8],
+              [6, 7], [6, 9], [6, 10],
+              [7, 8], [7, 10],
+              [8, 9], [8, 11],
+              [9, 11]]
 observables: []
 number_vectors: 1
 output: "heisenberg_kagome_12.h5"
