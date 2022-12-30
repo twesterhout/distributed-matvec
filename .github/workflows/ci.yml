@@ -5,6 +5,10 @@ on: [push, pull_request]
 env:
   LS_HS_VERSION: ba4a2fc
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   linux_tests:
     runs-on: ubuntu-latest
