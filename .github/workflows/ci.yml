@@ -34,7 +34,7 @@ jobs:
         source env/setup-env-comm-none.sh
         $CHPL_HOME/util/chplenv/printchplbuilds.py
         pushd $CHPL_HOME
-        make -j
+        make -j2
         popd
 
     - name: Build
