@@ -69,26 +69,26 @@ test: bin/TestStatesEnumeration bin/TestMatrixVectorProduct
 check: check-states-enumeration check-matrix-vector-product
 
 .PHONY: benchmark-states-enumeration
-benchmark-states-enumeration: bin/TestStatesEnumeration data/large-scale
+benchmark-states-enumeration: bin/TestStatesEnumeration
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/large-scale/construction/heisenberg_pyrochlore_2x2x2.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/large-scale/construction/heisenberg_kagome_36.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_square_6x6.yaml --kRepresentatives data/large-scale/construction/heisenberg_square_6x6.h5
 
 .PHONY: check-states-enumeration
-check-states-enumeration: bin/TestStatesEnumeration data/construction
+check-states-enumeration: bin/TestStatesEnumeration
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_10.yaml --kRepresentatives data/matvec/heisenberg_chain_10.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_12.yaml --kRepresentatives data/matvec/heisenberg_kagome_12.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_12_symm.yaml --kRepresentatives data/matvec/heisenberg_kagome_12_symm.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_16.yaml --kRepresentatives data/matvec/heisenberg_kagome_16.h5
 
 .PHONY: benchmark-matrix-vector-product
-benchmark-matrix-vector-product: bin/TestMatrixVectorProduct data/large-scale
+benchmark-matrix-vector-product: bin/TestMatrixVectorProduct
 	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/heisenberg_pyrochlore_2x2x2.h5
 	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/heisenberg_kagome_36.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_square_6x6.yaml --kVectors data/large-scale/matvec/heisenberg_square_6x6.h5
 
 .PHONY: check-matrix-vector-product
-check-matrix-vector-product: bin/TestMatrixVectorProduct data/matvec
+check-matrix-vector-product: bin/TestMatrixVectorProduct
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_4.yaml --kVectors data/matvec/heisenberg_chain_4.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_10.yaml --kVectors data/matvec/heisenberg_chain_10.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_kagome_16.yaml --kVectors data/matvec/heisenberg_kagome_16.h5
@@ -96,6 +96,7 @@ check-matrix-vector-product: bin/TestMatrixVectorProduct data/matvec
 
 TEST_DATA_URL = https://surfdrive.surf.nl/files/index.php/s/OK5527Awfgl1hT2/download
 
+.PHONY: data/construction
 data/construction:
 	mkdir -p data && cd data && \
 	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Fconstruction && \

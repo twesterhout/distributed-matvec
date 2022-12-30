@@ -1,4 +1,6 @@
 use LatticeSymmetries;
+use BlockToHashed;
+use HashedToBlock;
 use Time;
 use RangeChunk;
 

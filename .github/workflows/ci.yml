@@ -28,6 +28,13 @@ jobs:
         # patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
         ldd third_party/lib/liblattice_symmetries_haskell.so
 
+    - uses: actions/cache@v3
+      name: Cache Chapel runtime
+      with:
+        path: |
+          /opt/chapel
+        key: chapel-runtime
+
     - name: Build Chapel runtime
       run: |
         # echo "CHPL_HOME=${CHPL_HOME}"
@@ -51,6 +58,7 @@ jobs:
         key: test-data-v2
     - name: Test
       run: |
+        make data/matvec
         make check
 
     - name: Run examples
