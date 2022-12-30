@@ -117,10 +117,10 @@ lib: lib/liblattice_symmetries_chapel.so
 
 lib/liblattice_symmetries_chapel.a: $(LIB_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) --library --static -o lattice_symmetries_chapel $^ $(LDFLAGS)
+	chpl $(CFLAGS) --library --static --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
 
 lib/liblattice_symmetries_chapel.so: lib/liblattice_symmetries_chapel.a
-	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c $^ $(LDFLAGS)
+	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c $^ `$$CHPL_HOME/util/config/compileline --libraries` $(LDFLAGS)
 # ifeq ($(UNAME), Darwin)
 # 	install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
 # endif
@@ -136,6 +136,7 @@ ifeq ($(UNAME), Linux)
 	find $(DIST)/lib/ -name "*.$(SHARED_EXT)" -exec patchelf --set-rpath '$$ORIGIN' {} \;
 endif
 	tar -cf $(DIST).tar $(DIST)
+	rm -f $(DIST).tar.bz2
 	bzip2 $(DIST).tar
 ifneq ($(realpath $(PREFIX)), $(PWD))
 	install -m644 -C $(DIST).tar.bz2 $(PREFIX)
