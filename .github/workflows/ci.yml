@@ -53,17 +53,17 @@ jobs:
       name: Cache test data
       with:
         path: |
-          data/construction
           data/matvec
-        key: test-data-v2
+        key: test-data
     - name: Test
       run: |
-        make data/matvec
+        if [ ! -d "data/matvec" ]; then make data/matvec; fi
         make check
 
     - name: Run examples
       run: |
-        bin/Example01
+        bin/Example02
+        bin/Example05
 
         # mac_tests:
         #   runs-on: macos-latest
