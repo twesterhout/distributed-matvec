@@ -19,34 +19,23 @@ jobs:
     - name: Install system dependencies
       run: |
         apt-get update
-        apt-get install -y --no-install-recommends libnuma-dev libgmp-dev libffi-dev patchelf bzip2 unzip libhdf5-dev libhdf5-hl-100
+        apt-get install -y --no-install-recommends \
+          patchelf bzip2 unzip \
+          libnuma-dev libgmp-dev libffi-dev \
+          libhdf5-dev libhdf5-hl-100
+
     - name: Install lattice-symmetries-haskell
       run: |
         wget --no-verbose https://github.com/twesterhout/lattice-symmetries-haskell/releases/download/continuous/lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         tar -xf lattice-symmetries-haskell-${LS_HS_VERSION}-ubuntu-18.04.tar.bz2
         mv lattice-symmetries-haskell-${LS_HS_VERSION} third_party
         # patchelf --set-rpath '$ORIGIN' third_party/lib/liblattice_symmetries_haskell.so
-        ldd third_party/lib/liblattice_symmetries_haskell.so
-
-    - uses: actions/cache@v3
-      name: Cache Chapel runtime
-      with:
-        path: |
-          /opt/chapel
-        key: chapel-runtime
-
-    - name: Build Chapel runtime
-      run: |
-        # echo "CHPL_HOME=${CHPL_HOME}"
-        source env/setup-env-comm-none.sh
-        $CHPL_HOME/util/chplenv/printchplbuilds.py
-        pushd $CHPL_HOME
-        make -j2
-        popd
+        # ldd third_party/lib/liblattice_symmetries_haskell.so
 
     - name: Build
       run: |
-        source env/setup-env-comm-none.sh
+        # source env/setup-env-comm-none.sh
+        export LD_LIBRARY_PATH="$PWD/third_party/lib:$LD_LIBRARY_PATH"
         make
 
     - uses: actions/cache@v3
@@ -60,10 +49,32 @@ jobs:
         if [ ! -d "data/matvec" ]; then make data/matvec; fi
         make check
 
-    - name: Run examples
+    - name: Examples examples
       run: |
         bin/Example02
         bin/Example05
+
+    - name: Build foreign library
+      run: |
+        make OPTIMIZATION=--fast lib
+        make OPTIMIZATION=--fast release
+
+        # - uses: actions/cache@v3
+        #   name: Cache Chapel runtime
+        #   with:
+        #     path: |
+        #       /opt/chapel
+        #     key: chapel-runtime
+
+        # - name: Build Chapel runtime
+        #   run: |
+        #     # echo "CHPL_HOME=${CHPL_HOME}"
+        #     source env/setup-env-comm-none.sh
+        #     $CHPL_HOME/util/chplenv/printchplbuilds.py
+        #     pushd $CHPL_HOME
+        #     make -j2
+        #     popd
+
 
         # mac_tests:
         #   runs-on: macos-latest
