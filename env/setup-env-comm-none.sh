@@ -1,4 +1,4 @@
-if [ -z "${CHPL_HOME}+x" ]; then
+if [ -z "${CHPL_HOME+x}" ]; then
   export CHPL_HOME="$HOME/src/chapel"
 fi
 export GASNET_BACKTRACE=1

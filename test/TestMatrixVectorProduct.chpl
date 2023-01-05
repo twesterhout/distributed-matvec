@@ -27,6 +27,7 @@ proc main() {
   defer deinitRuntime();
 
   const (_, matrix) = loadConfigFromYaml(kHamiltonian, hamiltonian=true);
+  // writeln("constructed the matrix");
 
   const masks;
   const basisStates = enumerateStates(matrix.basis, masks);
@@ -37,7 +38,7 @@ proc main() {
 
   var timer = new Timer();
   timer.start();
-  matrixVectorProduct(kHamiltonian, x, z, basisStates);
+  matrixVectorProduct(matrix, x, z, basisStates);
   timer.stop();
 
   const yBlock = readDatasetAsBlocks(kVectors, "/y");

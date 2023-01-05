@@ -142,7 +142,7 @@ module FFI {
   // extern proc ls_hs_create_basis(particleType : ls_hs_particle_type, numberSites : c_int,
   //                                numberParticles : c_int, numberUp : c_int) : c_ptr(ls_hs_basis);
   extern proc ls_hs_clone_basis(basis : c_ptr(ls_hs_basis)) : c_ptr(ls_hs_basis);
-  extern proc ls_hs_destroy_basis_v2(basis : c_ptr(ls_hs_basis));
+  extern proc ls_hs_destroy_basis(basis : c_ptr(ls_hs_basis));
   extern proc ls_hs_min_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
   extern proc ls_hs_max_state_estimate(basis : c_ptr(ls_hs_basis)) : uint(64);
   extern proc ls_hs_basis_number_bits(basis : c_ptr(ls_hs_basis)) : c_int;
@@ -191,7 +191,7 @@ module FFI {
   extern proc ls_hs_clone_operator(op : c_ptr(ls_hs_operator)) : c_ptr(ls_hs_operator);
   extern proc ls_hs_operator_plus(a : c_ptr(ls_hs_operator), b : c_ptr(ls_hs_operator)) : c_ptr(ls_hs_operator);
   extern proc ls_hs_print_terms(op : c_ptr(ls_hs_operator));
-  extern proc ls_hs_destroy_operator_v2(op : c_ptr(ls_hs_operator));
+  extern proc ls_hs_destroy_operator(op : c_ptr(ls_hs_operator));
 
   extern proc ls_hs_operator_max_number_off_diag(op : c_ptr(ls_hs_operator)) : c_int;
   extern proc ls_hs_operator_is_hermitian(op : c_ptr(ls_hs_operator)) : bool;

@@ -52,7 +52,7 @@ module ForeignTypes {
 
     proc _destroy() {
       if owning then
-        ls_hs_destroy_basis_v2(payload);
+        ls_hs_destroy_basis(payload);
     }
 
     proc deinit() {
@@ -162,8 +162,9 @@ module ForeignTypes {
     }
     proc init(raw : c_ptr(ls_hs_operator), owning : bool = true) {
       assert(raw.locale == here);
+      // logDebug("Creating Operator from ", raw, ", raw.deref().basis=", raw.deref().basis);
       this.payload = raw;
-      this.basis = new Basis(this.payload.deref().basis, owning=false);
+      this.basis = new Basis(raw.deref().basis, owning=false);
       this.owning = owning;
       this._origin = here;
     }
@@ -198,7 +199,7 @@ module ForeignTypes {
 
     proc deinit() {
       if owning then
-        ls_hs_destroy_operator_v2(payload);
+        ls_hs_destroy_operator(payload);
     }
 
     inline proc numberDiagTerms() : int {
@@ -246,15 +247,18 @@ module ForeignTypes {
     if configPtr == nil then
       halt("failed to load Config from '" + filename + "'");
     defer ls_hs_destroy_yaml_config(configPtr);
-   
+  
+    // logDebug("built config; creating basis...");
     ref conf = configPtr.deref();
     const basis = new Basis(ls_hs_clone_basis(conf.basis), owning=true);
 
+    // logDebug("built basis; creating hamiltonian...");
     if hamiltonian && conf.hamiltonian == nil then
       halt("'" + filename + "' does not contain a Hamiltonian");
     const h = if hamiltonian
                 then new Operator(ls_hs_clone_operator(conf.hamiltonian), owning=true)
                 else nil;
+    // logDebug("built hamiltonian; creating observables...");
 
     var os : [0 ..# conf.number_observables:int] Operator =
       [i in 0 ..# conf.number_observables:int]

@@ -1044,6 +1044,7 @@ proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] 
   assert(representatives.locale == here);
   if matrix.numberDiagTerms() > 0 then
     localDiagonal(matrix, x, y, representatives);
+  // logDebug("Done with diagonal");
   // if kUseQueue then
   //   localOffDiagonal(matrix, x, y, representatives);
   // else
@@ -1051,29 +1052,32 @@ proc localMatrixVector(matrix : Operator, const ref x : [] ?eltType, ref y : [] 
     localOffDiagonalNoQueue(matrix, x, y, representatives);
 }
 
-proc matrixVectorProduct(matrixFilename : string,
+proc matrixVectorProduct(const ref matrix : Operator,
                          const ref x,
                          ref y,
                          const ref representatives) {
-  logDebug("Calling matrixVectorProduct...");
+  // logDebug("Calling matrixVectorProduct...");
   coforall loc in Locales with (ref y) do on loc {
-    var (_, myMatrix) = loadConfigFromYaml(matrixFilename, hamiltonian=true);
+    // var (_, myMatrix) = loadConfigFromYaml(matrixFilename, hamiltonian=true);
+    const myMatrix = matrix;
     const ref myX = x.getBlock(loc.id)[0, ..];
     ref myY = y.getBlock(loc.id)[0, ..];
     const ref myBasisStates = representatives.getBlock(loc.id);
+    // logDebug("Setting representatives...");
     myMatrix.basis.uncheckedSetRepresentatives(myBasisStates);
-    // myY += 1;
+    // logDebug("Done setting representatives");
     var timer = new Timer();
     timer.start();
     localMatrixVector(myMatrix, myX, myY, myBasisStates);
     timer.stop();
-    logDebug("Spent ", timer.elapsed(), " in localMatrixVector");
+    if kDisplayTimings then
+      logDebug("Spent ", timer.elapsed(), " in localMatrixVector");
   }
 }
 
 export proc ls_chpl_matrix_vector_product(matrixPtr : c_ptr(ls_hs_operator), numVectors : c_int,
                                           xPtr : c_ptr(real(64)), yPtr : c_ptr(real(64))) {
-  logDebug("Calling ls_chpl_matrix_vector_product ...");
+  // logDebug("Calling ls_chpl_matrix_vector_product ...");
   var matrix = new Operator(matrixPtr, owning=false);
   if matrix.basis.numberWords != 1 then
     halt("bases with more than 64 bits are not yet implemented");
@@ -1087,7 +1091,7 @@ export proc ls_chpl_matrix_vector_product(matrixPtr : c_ptr(ls_hs_operator), num
   var x = makeArrayFromPtr(xPtr, (numStates,));
   var y = makeArrayFromPtr(yPtr, (numStates,));
   localMatrixVector(matrix, x, y, representatives);
-  logDebug("Done!");
+  // logDebug("Done!");
 }
 
 /*
