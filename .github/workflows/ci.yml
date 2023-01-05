@@ -121,6 +121,4 @@ jobs:
 
     - name: Build foreign library
       run: |
-        make OPTIMIZATION=--fast lib
-        ls -l lib/
         make OPTIMIZATION=--fast release

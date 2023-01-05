@@ -13,15 +13,18 @@ LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell
 
 PRIMME_CFLAGS = -I/home/tom/src/primme/include
 PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -llapacke -lopenblas -lm -lgomp -lpthread
-HDF5_CFLAGS = $(shell pkg-config --cflags hdf5)
-HDF5_LIBS = -lhdf5_hl $(shell pkg-config --libs hdf5)
+
 
 ifeq ($(UNAME), Linux)
+  HDF5_CFLAGS = $(shell pkg-config --cflags hdf5)
+  HDF5_LIBS = -lhdf5_hl $(shell pkg-config --libs hdf5)
   CONDA_CC ?= $(shell conda run -n ci_devel bash -c "which \$${CC}")
   CONDA_PREFIX ?= $(shell conda run -n ci_devel bash -c "echo \$${CONDA_PREFIX}")
   SHARED_EXT = so
   SHARED_FLAG = -shared -rdynamic
 else
+  HDF5_CFLAGS =
+  HDF5_LIBS = -lhdf5_hl -lhdf5
   CONDA_CC = $(CC)
   CONDA_PREFIX = 
   SHARED_EXT = dylib
@@ -136,16 +139,15 @@ data/large-scale:
 
 lib: lib/liblattice_symmetries_chapel.$(SHARED_EXT)
 
-lib/liblattice_symmetries_chapel.a: $(LIB_MODULES)
+lib/liblattice_symmetries_chapel.$(SHARED_EXT): $(LIB_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) --library --static --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
-
-lib/liblattice_symmetries_chapel.$(SHARED_EXT): lib/liblattice_symmetries_chapel.a
 ifeq ($(UNAME), Darwin)
-	chpl $(CFLAGS) --library --dynamic --library-makefile -o lattice_symmetries_chapel $(LIB_MODULES) $(LDFLAGS)
+	chpl $(CFLAGS) --library --dynamic --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
 	# install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
 else
+	chpl $(CFLAGS) --library --static --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
 	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c $^ `$$CHPL_HOME/util/config/compileline --libraries` $(LDFLAGS)
+	rm lib/liblattice_symmetries_chapel.a
 endif
 
 .PHONY: release
@@ -154,7 +156,8 @@ release: lib
 	mkdir -p $(DIST)/lib
 	install -m644 -C third_party/include/*.h $(DIST)/include/
 	install -m644 -C third_party/lib/*.$(SHARED_EXT) $(DIST)/lib/
-	install -m644 -C lib/liblattice_symmetries_chapel.$(SHARED_EXT) $(DIST)/lib/
+	install -m644 -C lib/liblattice_symmetries_chapel.* $(DIST)/lib/
+	rm -f $(DIST)/lib/liblattice_symmetries_chapel.a
 ifeq ($(UNAME), Linux)
 	find $(DIST)/lib/ -name "*.$(SHARED_EXT)" -exec patchelf --set-rpath '$$ORIGIN' {} \;
 endif
