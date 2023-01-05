@@ -58,13 +58,11 @@ jobs:
     - uses: conda-incubator/setup-miniconda@v2
       with:
         mamba-version: "*"
+        miniforge-version: "*"
         channels: conda-forge,defaults
         channel-priority: true
-        auto-activate-base: false
-
-    - name: Create Conda environment
-      run: |
-          mamba env create -f conda-ci-linux.yml
+        activate-environment: ci_devel
+        environment-file: conda-ci-linux.yml
 
     - name: Build foreign library
       run: |

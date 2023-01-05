@@ -134,17 +134,19 @@ data/large-scale:
 	wget -q -O tmp.zip $(TEST_DATA_URL)?path=%2Fdata%2Flarge-scale && \
 	unzip tmp.zip && rm tmp.zip
 
-lib: lib/liblattice_symmetries_chapel.so
+lib: lib/liblattice_symmetries_chapel.$(SHARED_EXT)
 
 lib/liblattice_symmetries_chapel.a: $(LIB_MODULES)
 	@mkdir -p $(@D)
 	chpl $(CFLAGS) --library --static --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
 
-lib/liblattice_symmetries_chapel.so: lib/liblattice_symmetries_chapel.a
+lib/liblattice_symmetries_chapel.$(SHARED_EXT): lib/liblattice_symmetries_chapel.a
+ifeq ($(UNAME), Darwin)
+	chpl $(CFLAGS) --library --dynamic --library-makefile -o lattice_symmetries_chapel $(LIB_MODULES) $(LDFLAGS)
+	# install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
+else
 	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c $^ `$$CHPL_HOME/util/config/compileline --libraries` $(LDFLAGS)
-# ifeq ($(UNAME), Darwin)
-# 	install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
-# endif
+endif
 
 .PHONY: release
 release: lib
