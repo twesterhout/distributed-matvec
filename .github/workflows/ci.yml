@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 env:
-  LS_HS_VERSION: ba4a2fc
+  LS_HS_VERSION: 0754e43
 
 defaults:
   run:
