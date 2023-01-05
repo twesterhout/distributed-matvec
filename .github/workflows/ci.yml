@@ -64,26 +64,26 @@ jobs:
         activate-environment: ci_devel
         environment-file: conda-ci-linux.yml
 
+    - uses: actions/cache@v3
+      name: Cache Chapel runtime
+      with:
+        path: |
+          /opt/chapel
+        key: chapel-runtime
+
+    - name: Build Chapel runtime
+      run: |
+        source env/setup-env-comm-none.sh
+        $CHPL_HOME/util/chplenv/printchplbuilds.py
+        pushd $CHPL_HOME
+        make -j2
+        popd
+
     - name: Build foreign library
       run: |
+        source env/setup-env-comm-none.sh
         make OPTIMIZATION=--fast lib
         make OPTIMIZATION=--fast release
-
-        # - uses: actions/cache@v3
-        #   name: Cache Chapel runtime
-        #   with:
-        #     path: |
-        #       /opt/chapel
-        #     key: chapel-runtime
-
-        # - name: Build Chapel runtime
-        #   run: |
-        #     # echo "CHPL_HOME=${CHPL_HOME}"
-        #     source env/setup-env-comm-none.sh
-        #     $CHPL_HOME/util/chplenv/printchplbuilds.py
-        #     pushd $CHPL_HOME
-        #     make -j2
-        #     popd
 
   mac_tests:
     runs-on: macos-latest
@@ -122,4 +122,5 @@ jobs:
     - name: Build foreign library
       run: |
         make OPTIMIZATION=--fast lib
+        ls -l lib/
         make OPTIMIZATION=--fast release
