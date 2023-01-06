@@ -142,7 +142,7 @@ lib: lib/liblattice_symmetries_chapel.$(SHARED_EXT)
 lib/liblattice_symmetries_chapel.$(SHARED_EXT): $(LIB_MODULES)
 	@mkdir -p $(@D)
 ifeq ($(UNAME), Darwin)
-	chpl $(CFLAGS) --library --dynamic --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
+	chpl $(CFLAGS) --library --dynamic --library-makefile -o lattice_symmetries_chapel $^ src/library.c $(LDFLAGS)
 	# install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
 else
 	chpl $(CFLAGS) --library --static --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
