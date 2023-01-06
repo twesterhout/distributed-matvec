@@ -146,7 +146,7 @@ ifeq ($(UNAME), Darwin)
 	# install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
 else
 	chpl $(CFLAGS) --library --static --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
-	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c $^ `$$CHPL_HOME/util/config/compileline --libraries` $(LDFLAGS)
+	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c lib/liblattice_symmetries_chapel.a `$$CHPL_HOME/util/config/compileline --libraries` $(LDFLAGS)
 	rm lib/liblattice_symmetries_chapel.a
 endif
 
