@@ -82,8 +82,12 @@ jobs:
     - name: Build foreign library
       run: |
         source env/setup-env-comm-none.sh
-        make OPTIMIZATION=--fast lib
         make OPTIMIZATION=--fast release
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: lattice-symmetries-chapel-linux
+        path: lattice-symmetries-chapel-*.tar.bz2
 
   mac_tests:
     runs-on: macos-latest
@@ -125,6 +129,6 @@ jobs:
 
     - uses: actions/upload-artifact@v3
       with:
-        name: lattice-symmetries-chapel-${{ matrix.os }}
+        name: lattice-symmetries-chapel-macos
         path: lattice-symmetries-chapel-*.tar.bz2
 
