@@ -161,13 +161,15 @@ jobs:
         miniforge-version: latest
         channels: conda-forge,defaults
         channel-priority: true
-        activate-environment: ci_devel
-        environment-file: lattice-symmetries-haskell/conda-ci-linux.yml
 
     - name: Build Conda package
       run: |
         cd lattice-symmetries-haskell/python
-        conda env list
-        source ~/.profile
-        conda activate ci_devel
-        mamba build -c conda-forge conda/
+        # source ~/.profile
+        mkdir conda_output
+        mamba install -c conda-forge anaconda-client conda-build conda-verify
+        mamba build -c conda-forge --output-folder=$PWD/conda_output conda/
+    
+    - uses: actions/upload-artifact@v3
+      with:
+        path: conda_output/*
