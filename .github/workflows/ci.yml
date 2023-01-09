@@ -132,3 +132,40 @@ jobs:
         name: lattice-symmetries-chapel-macos
         path: lattice-symmetries-chapel-*.tar.bz2
 
+  conda_release:
+    name: Creating a Conda package
+    needs: [linux_tests]
+    runs-on: ubuntu-20.04
+    steps:
+    - name: Checkout
+      run: |
+        git clone --depth=1 https://github.com/twesterhout/lattice-symmetries-haskell.git
+        cd lattice-symmetries-haskell/
+
+    - name: Download artifacts
+      uses: actions/download-artifact@v2
+      with:
+        name: lattice-symmetries-chapel-linux
+    - name: Inspect directory after downloading artifacts
+      run: |
+        ls -alFR
+
+    - name: Move to the target folder
+      run: |
+        tar -xf lattice-symmetries-chapel-*.tar.bz2
+        rm lattice-symmetries-chapel-*.tar.bz2
+        mv lattice-symmetries-chapel-*/ python/lattice_symmetries/
+
+    - uses: conda-incubator/setup-miniconda@v2
+      with:
+        mamba-version: "*"
+        miniforge-version: latest
+        channels: conda-forge,defaults
+        channel-priority: true
+        activate-environment: ci_devel
+        environment-file: conda-ci-linux.yml
+
+    - name: Build Conda package
+      run: |
+        cd python
+        mamba build -c conda-forge conda/

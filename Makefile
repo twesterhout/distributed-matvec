@@ -142,10 +142,10 @@ lib: lib/liblattice_symmetries_chapel.$(SHARED_EXT)
 lib/liblattice_symmetries_chapel.$(SHARED_EXT): $(LIB_MODULES) src/library.c
 	@mkdir -p $(@D)
 ifeq ($(UNAME), Darwin)
-	chpl $(CFLAGS) --library --dynamic --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
+	chpl $(CFLAGS) --library --dynamic -o lattice_symmetries_chapel $^ $(LDFLAGS)
 	# install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
 else
-	chpl $(CFLAGS) --library --static --library-makefile -o lattice_symmetries_chapel $(LIB_MODULES) $(LDFLAGS)
+	chpl $(CFLAGS) --library --static -o lattice_symmetries_chapel $(LIB_MODULES) $(LDFLAGS)
 	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c lib/liblattice_symmetries_chapel.a `$$CHPL_HOME/util/config/compileline --libraries` $(LDFLAGS)
 	rm lib/liblattice_symmetries_chapel.a
 endif
@@ -155,7 +155,9 @@ release: lib
 	mkdir -p $(DIST)/include
 	mkdir -p $(DIST)/lib
 	install -m644 -C third_party/include/*.h $(DIST)/include/
-	install -m644 -C third_party/lib/*.$(SHARED_EXT) $(DIST)/lib/
+	# NOTE: Only copy liblattice_symmetries_haskell;
+	# it is assumed that libffi will be installed via Conda
+	install -m644 -C third_party/lib/liblattice_symmetries_*.$(SHARED_EXT) $(DIST)/lib/
 	install -m644 -C lib/liblattice_symmetries_chapel.* $(DIST)/lib/
 	rm -f $(DIST)/lib/liblattice_symmetries_chapel.a
 ifeq ($(UNAME), Linux)
