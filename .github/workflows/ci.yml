@@ -166,9 +166,9 @@ jobs:
       run: |
         cd lattice-symmetries-haskell/python
         # source ~/.profile
-        mkdir conda_output
+        mkdir $GITHUB_WORKSPACE/conda_output
         mamba install -c conda-forge anaconda-client conda-build conda-verify
-        mamba build -c conda-forge --output-folder=$PWD/conda_output conda/
+        mamba build -c conda-forge --output-folder=$GITHUB_WORKSPACE/conda_output conda/
     
     - uses: actions/upload-artifact@v3
       with:
