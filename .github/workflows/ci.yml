@@ -167,4 +167,5 @@ jobs:
     - name: Build Conda package
       run: |
         cd lattice-symmetries-haskell/python
+        conda activate ci_devel
         mamba build -c conda-forge conda/
