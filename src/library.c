@@ -18,8 +18,8 @@ extern void chpl_library_finalize(void);
 
 void ls_chpl_init(void) {
   int const argc = 1;
-  char *argv[2] = {"lattice_symmetries", NULL};
-  chpl_library_init(argc, argv);
+  char const *argv[2] = {"lattice_symmetries", NULL};
+  chpl_library_init(argc, (char**)argv);
   chpl__init_BatchedOperator(1, 2);
   chpl__init_CommonParameters(1, 2);
   chpl__init_ConcurrentAccessor(1, 2);

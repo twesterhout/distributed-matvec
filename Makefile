@@ -139,13 +139,13 @@ data/large-scale:
 
 lib: lib/liblattice_symmetries_chapel.$(SHARED_EXT)
 
-lib/liblattice_symmetries_chapel.$(SHARED_EXT): $(LIB_MODULES)
+lib/liblattice_symmetries_chapel.$(SHARED_EXT): $(LIB_MODULES) src/library.c
 	@mkdir -p $(@D)
 ifeq ($(UNAME), Darwin)
-	chpl $(CFLAGS) --library --dynamic --library-makefile -o lattice_symmetries_chapel $^ src/library.c $(LDFLAGS)
+	chpl $(CFLAGS) --library --dynamic --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
 	# install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
 else
-	chpl $(CFLAGS) --library --static --library-makefile -o lattice_symmetries_chapel $^ $(LDFLAGS)
+	chpl $(CFLAGS) --library --static --library-makefile -o lattice_symmetries_chapel $(LIB_MODULES) $(LDFLAGS)
 	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c lib/liblattice_symmetries_chapel.a `$$CHPL_HOME/util/config/compileline --libraries` $(LDFLAGS)
 	rm lib/liblattice_symmetries_chapel.a
 endif
