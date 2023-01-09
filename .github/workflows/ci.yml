@@ -140,7 +140,6 @@ jobs:
     - name: Checkout
       run: |
         git clone --depth=1 https://github.com/twesterhout/lattice-symmetries-haskell.git
-        cd lattice-symmetries-haskell/
 
     - name: Download artifacts
       uses: actions/download-artifact@v2
@@ -154,7 +153,7 @@ jobs:
       run: |
         tar -xf lattice-symmetries-chapel-*.tar.bz2
         rm lattice-symmetries-chapel-*.tar.bz2
-        mv lattice-symmetries-chapel-*/ python/lattice_symmetries/
+        mv lattice-symmetries-chapel-*/ lattice-symmetries-haskell/python/lattice_symmetries/
 
     - uses: conda-incubator/setup-miniconda@v2
       with:
@@ -163,9 +162,9 @@ jobs:
         channels: conda-forge,defaults
         channel-priority: true
         activate-environment: ci_devel
-        environment-file: conda-ci-linux.yml
+        environment-file: lattice-symmetries-haskell/conda-ci-linux.yml
 
     - name: Build Conda package
       run: |
-        cd python
+        cd lattice-symmetries-haskell/python
         mamba build -c conda-forge conda/
