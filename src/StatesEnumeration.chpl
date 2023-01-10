@@ -189,8 +189,9 @@ private proc _enumerateStatesUnprojected(r : range(uint(64)), const ref basis : 
   var high = r.high;
   if hasSpinInversionSymmetry {
     const numberSites = basis.numberSites();
-    const mask = (1 << numberSites) - 1; // isolate the lower numberSites bits
+    const mask = (1:uint(64) << numberSites) - 1; // isolate the lower numberSites bits
     high = min(high, high ^ mask);
+    assert(popcount(high) == popcount(low));
   }
   const lowIdx = unprojectedStateToIndex(low, isHammingWeightFixed);
   const highIdx = unprojectedStateToIndex(high, isHammingWeightFixed);

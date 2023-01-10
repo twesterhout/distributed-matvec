@@ -3,3 +3,12 @@
 *.sif
 v1/
 v2/
+third_party
+*.tar
+*.bz2
+third_party.local
+lib/
+bin/
+data/matvec
+__pycache__/
+lattice-symmetries-haskell-*/

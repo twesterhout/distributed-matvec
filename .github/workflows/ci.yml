@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 env:
-  LS_HS_VERSION: "c2aef42"
+  LS_HS_VERSION: "1253f4a"
 
 defaults:
   run:
@@ -172,4 +172,5 @@ jobs:
     
     - uses: actions/upload-artifact@v3
       with:
+        name: conda-packages-linux
         path: conda_output/*
