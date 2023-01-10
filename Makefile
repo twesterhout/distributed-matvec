@@ -74,9 +74,9 @@ check: check-states-enumeration check-matrix-vector-product
 
 .PHONY: benchmark-states-enumeration
 benchmark-states-enumeration: bin/TestStatesEnumeration
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/large-scale/construction/heisenberg_pyrochlore_2x2x2.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/large-scale/construction/heisenberg_kagome_36.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_square_6x6.yaml --kRepresentatives data/large-scale/construction/heisenberg_square_6x6.h5
+	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/large-scale/construction/heisenberg_pyrochlore_2x2x2.h5
+	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/large-scale/construction/heisenberg_kagome_36.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_square_6x6.yaml --kRepresentatives data/large-scale/matvec/heisenberg_square_6x6.h5
 
 .PHONY: check-states-enumeration
 check-states-enumeration: bin/TestStatesEnumeration

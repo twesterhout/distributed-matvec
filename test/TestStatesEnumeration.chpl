@@ -16,8 +16,8 @@ proc main() {
   const reference = localLoadRepresentatives(kRepresentatives);
   const basis = loadConfigFromYaml(kHamiltonian);
 
-  var masks;
-  const states = enumerateStates(basis, masks);
+  // var masks;
+  // const states = enumerateStates(basis, masks);
   // for loc in Locales do
   //   writeln(states[loc]);
 

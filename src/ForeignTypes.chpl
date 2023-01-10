@@ -3,12 +3,14 @@ module ForeignTypes {
 
   use CTypes;
   use ByteBufferHelpers;
+  use Time;
 
   record Basis {
     var payload : c_ptr(ls_hs_basis);
     var owning : bool;
     var _origin : locale;
     var _json_repr : string;
+    var _hasPermutationSymmetries : bool;
 
     proc init(p : c_ptr(ls_hs_basis), owning : bool = true) {
       assert(here == p.locale);
@@ -17,6 +19,8 @@ module ForeignTypes {
       this._origin = here;
       complete();
       this._json_repr = _toJSON();
+      this._hasPermutationSymmetries =
+        ls_hs_basis_has_permutation_symmetries(this.payload);
     }
     proc init(jsonString : string) {
       const s = jsonString.localize();
@@ -24,6 +28,8 @@ module ForeignTypes {
       this.owning = true;
       this._origin = here;
       this._json_repr = s;
+      this._hasPermutationSymmetries =
+        ls_hs_basis_has_permutation_symmetries(this.payload);
     }
 
     proc init=(const ref from : Basis) {
@@ -32,6 +38,8 @@ module ForeignTypes {
         this.owning = true;
         this._origin = here;
         this._json_repr = from.json_repr;
+        this._hasPermutationSymmetries =
+          ls_hs_basis_has_permutation_symmetries(this.payload);
       }
       else {
         const s = from.json_repr.localize();
@@ -39,6 +47,8 @@ module ForeignTypes {
         this.owning = true;
         this._origin = here;
         this._json_repr = s;
+        this._hasPermutationSymmetries =
+          ls_hs_basis_has_permutation_symmetries(this.payload);
       }
     }
 
@@ -75,8 +85,12 @@ module ForeignTypes {
       // logDebug("ls_hs_basis_has_fixed_hamming_weight");
       return ls_hs_basis_has_fixed_hamming_weight(payload);
     }
-    proc hasSpinInversionSymmetry() { return ls_hs_basis_has_spin_inversion_symmetry(payload); }
-    proc hasPermutationSymmetries() { return ls_hs_basis_has_permutation_symmetries(payload); }
+    proc hasSpinInversionSymmetry() {
+      return ls_hs_basis_has_spin_inversion_symmetry(payload);
+    }
+    inline proc hasPermutationSymmetries() {
+      return _hasPermutationSymmetries;
+    }
 
     proc numberBits : int { return ls_hs_basis_number_bits(payload):int; }
     proc numberWords : int { return ls_hs_basis_number_words(payload):int; }
