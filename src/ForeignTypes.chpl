@@ -75,12 +75,15 @@ module ForeignTypes {
       // logDebug("ls_hs_basis_has_fixed_hamming_weight");
       return ls_hs_basis_has_fixed_hamming_weight(payload);
     }
+    proc hasSpinInversionSymmetry() { return ls_hs_basis_has_spin_inversion_symmetry(payload); }
+    proc hasPermutationSymmetries() { return ls_hs_basis_has_permutation_symmetries(payload); }
 
     proc numberBits : int { return ls_hs_basis_number_bits(payload):int; }
     proc numberWords : int { return ls_hs_basis_number_words(payload):int; }
     proc numberSites() : int { return payload.deref().number_sites; }
     proc numberParticles() : int { return payload.deref().number_particles; }
     proc numberUp() : int { return payload.deref().number_up; }
+    proc spinInversion : int { return payload.deref().spin_inversion:int; }
 
     proc minStateEstimate() : uint(64) {
       // logDebug("ls_hs_min_state_estimate");

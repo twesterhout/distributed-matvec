@@ -114,6 +114,51 @@ record BatchedOperator {
       keysTimer.stop();
       return (totalCount, betas, cs, keys);
     }
+    // Another simple case when no permutations were given,
+    // only the spin inversion
+    if !matrix.basis.hasPermutationSymmetries() && matrix.basis.hasSpinInversionSymmetry() {
+      const betas = c_pointer_return(_spins1[0]);
+      const cs = c_pointer_return(_coeffs1[0]);
+      const offsets = c_pointer_return(_offsets[0]);
+      const keys = c_pointer_return(_localeIdxs[0]);
+      // We compute H|αᵢ⟩ = ∑ⱼ cᵢⱼ|βᵢⱼ⟩ for each |αᵢ⟩ where i ∈ {0 ..# count}
+      // at this point j ∈ {0 ..# _numberOffDiagTerms}. Both cᵢⱼ and |βᵢⱼ⟩ are
+      // conceptually 2-dimensional arrays, but we use flattened
+      // representations of them.
+      applyOffDiagTimer.start();
+      ls_internal_operator_apply_off_diag_x1(
+        matrix.payload,
+        count,
+        alphas,
+        betas,
+        cs,
+        offsets,
+        xs);
+      applyOffDiagTimer.stop();
+
+      const totalCount = offsets[count];
+      const mask = (1:uint(64) << matrix.basis.numberSites()) - 1;
+      const character = matrix.basis.spinInversion;
+      assert(character != 0);
+
+      stateInfoTimer.start();
+      foreach i in 0 ..# totalCount {
+        const current = betas[i];
+        const inverted = current ^ mask;
+        if inverted < current {
+          betas[i] = inverted;
+          cs[i] *= character;
+        }
+      }
+      stateInfoTimer.stop();
+
+      keysTimer.start();
+      foreach i in 0 ..# totalCount {
+        keys[i] = localeIdxOf(betas[i]):uint(8);
+      }
+      keysTimer.stop();
+      return (totalCount, betas, cs, keys);
+    }
 
     // The tricky case when we have to project betas first
     const tempSpins = c_pointer_return(_spins2[0]);

@@ -180,15 +180,25 @@ private proc _enumerateStatesProjected(r : range(uint(64)), const ref basis : Ba
 private proc _enumerateStatesUnprojected(r : range(uint(64)), const ref basis : Basis,
                                          ref outStates : Vector(uint(64))) {
   const isHammingWeightFixed = basis.isHammingWeightFixed();
+  const hasSpinInversionSymmetry = basis.hasSpinInversionSymmetry();
   if isHammingWeightFixed && popcount(r.low) != popcount(r.high) then
     halt("r.low=" + r.low:string + " and r.high=" + r.high:string
         + " have different Hamming weight: " + popcount(r.low):string
         + " vs. " + popcount(r.high):string);
-  const lowIdx = unprojectedStateToIndex(r.low, isHammingWeightFixed);
-  const highIdx = unprojectedStateToIndex(r.high, isHammingWeightFixed);
+  var low = r.low;
+  var high = r.high;
+  if hasSpinInversionSymmetry {
+    const numberSites = basis.numberSites();
+    const mask = (1 << numberSites) - 1; // isolate the lower numberSites bits
+    high = min(high, high ^ mask);
+  }
+  const lowIdx = unprojectedStateToIndex(low, isHammingWeightFixed);
+  const highIdx = unprojectedStateToIndex(high, isHammingWeightFixed);
   const totalCount = highIdx - lowIdx + 1;
-  outStates.resize(totalCount);
-  manyNextState(r.low, r.high, outStates._arr, isHammingWeightFixed);
+  if totalCount > 0 {
+    outStates.resize(totalCount);
+    manyNextState(low, high, outStates._arr, isHammingWeightFixed);
+  }
 }
 private proc _enumerateStatesUnprojectedSpinfulFermion(r : range(uint(64)),
                                                        const ref basis : Basis,
@@ -224,7 +234,7 @@ private proc _enumerateStatesUnprojectedSpinfulFermion(r : range(uint(64)),
 
 private proc _enumerateStates(r : range(uint(64)), const ref basis : Basis,
                               ref outStates : Vector(uint(64))) {
-  if basis.requiresProjection() then
+  if basis.hasPermutationSymmetries() then
     _enumerateStatesProjected(r, basis, outStates);
   else if basis.isStateIndexIdentity() || basis.isHammingWeightFixed() then
     _enumerateStatesUnprojected(r, basis, outStates);

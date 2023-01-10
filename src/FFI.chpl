@@ -96,6 +96,7 @@ module FFI {
     var number_particles : c_int;
     var number_up : c_int;
     var particle_type : ls_hs_particle_type;
+    var spin_inversion : c_int;
     var state_index_is_identity : bool;
     var requires_projection : bool;
     var kernels : c_ptr(ls_hs_basis_kernels);
@@ -148,6 +149,9 @@ module FFI {
   extern proc ls_hs_basis_number_bits(basis : c_ptr(ls_hs_basis)) : c_int;
   extern proc ls_hs_basis_number_words(basis : c_ptr(ls_hs_basis)) : c_int;
   extern proc ls_hs_basis_has_fixed_hamming_weight(basis : c_ptr(ls_hs_basis)) : bool;
+  extern proc ls_hs_basis_has_spin_inversion_symmetry(basis : c_ptr(ls_hs_basis)) : bool;
+  extern proc ls_hs_basis_has_permutation_symmetries(basis : c_ptr(ls_hs_basis)) : bool;
+  extern proc ls_hs_basis_requires_projection(basis : c_ptr(ls_hs_basis)) : bool;
 
   extern proc ls_hs_basis_from_json(json_string : c_string) : c_ptr(ls_hs_basis);
   extern proc ls_hs_basis_to_json(basis : c_ptr(ls_hs_basis)) : c_string;

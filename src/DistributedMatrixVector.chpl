@@ -1081,8 +1081,6 @@ export proc ls_chpl_matrix_vector_product(matrixPtr : c_ptr(ls_hs_operator), num
   var matrix = new Operator(matrixPtr, owning=false);
   if matrix.basis.numberWords != 1 then
     halt("bases with more than 64 bits are not yet implemented");
-  if matrix.basis.requiresProjection() then
-    halt("bases that require projection are not yet supported");
   if numVectors != 1 then
     halt("applying the Operator to more than 1 vector is not yet implemented");
 
