@@ -1,6 +1,8 @@
 module MyHDF5 {
-  use CTypes;
+  use AllLocalesBarriers;
   use BlockDist;
+  use CTypes;
+  import FileSystem;
   import HDF5;
   import HDF5.C_HDF5;
 
@@ -210,27 +212,44 @@ module MyHDF5 {
 
   /* Write array to a HDF5 dataset.
    */
-  /*
-  proc writeHDF5Chunk(filename : string, dataset : string, offset, array : [?D] ?eltType)
-      where isTuple(offset) && offset.size == D.rank {
-    assert(D.rank == offset.size);
-    var c_offset : [0 .. D.rank - 1] uint(64) = noinit;
-    var c_shape  : [0 .. D.rank - 1] uint(64) = noinit;
-    for i in c_offset.domain { c_offset[i] = offset[i]:uint; }
-    for i in c_shape.domain { c_shape[i] = array.dim(i).size:uint; }
+  proc writeDatasetChunk(filename : string, dataset : string, offset,
+                         const ref arr : [?D] ?eltType)
+      where isTuple(offset) && offset.size == arr.rank {
+    const file_id = openFile(filename, C_HDF5.H5F_ACC_RDWR);
+    defer C_HDF5.H5Fclose(file_id);
+    // NOTE: without the barrier, H5Dopen fails
+    // when called from multiple locales in parallel.
+    allLocalesBarrier.barrier();
 
-    if (eltType == uint(64)) {
-      ls_hs_hdf5_write_chunk_u64(filename.localize().c_str(), dataset.localize().c_str(),
-        D.rank:c_uint, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(array));
-    } else if (eltType == real(64)) {
-      ls_hs_hdf5_write_chunk_f64(filename.localize().c_str(), dataset.localize().c_str(),
-        D.rank:c_uint, c_ptrTo(c_offset), c_ptrTo(c_shape), c_ptrTo(array));
+    const dset_id = openDataset(file_id, dataset);
+    defer C_HDF5.H5Dclose(dset_id);
+    const dspace_id = C_HDF5.H5Dget_space(dset_id);
+    defer C_HDF5.H5Sclose(dspace_id);
+    const datasetRank = C_HDF5.H5Sget_simple_extent_ndims(dspace_id);
+    if arr.rank != datasetRank then
+      halt("rank mismatch in file: '" + filename + "' dataset: '" + dataset +
+           "'  " + arr.rank:string + " != " + datasetRank:string);
+    const dtype_id = C_HDF5.H5Dget_type(dset_id);
+    defer C_HDF5.H5Tclose(dtype_id);
+    if C_HDF5.H5Tequal(HDF5.getHDF5Type(eltType), dtype_id) <= 0 then
+      halt("type mismatch in file: '" + filename + "' dataset: '" + dataset +
+           "'  " + HDF5.getHDF5Type(eltType):string + " != " + dtype_id:string);
+
+    var c_offset : [0 ..# arr.rank] C_HDF5.hsize_t;
+    var c_shape : [0 ..# arr.rank] C_HDF5.hsize_t;
+    for i in 0 ..# arr.rank {
+      c_offset[i] = offset[i]:C_HDF5.hsize_t;
+      c_shape[i] = arr.dim(i).size:C_HDF5.hsize_t;
     }
-    else {
-      assert(false);
-    }
+    const mspace_id = C_HDF5.H5Screate_simple(arr.rank, c_ptrTo(c_shape), nil);
+    defer C_HDF5.H5Sclose(mspace_id);
+    C_HDF5.H5Sselect_hyperslab(dspace_id, C_HDF5.H5S_SELECT_SET,
+                               c_ptrTo(c_offset), nil,
+                               c_ptrTo(c_shape), nil);
+    const err = C_HDF5.H5Dwrite(dset_id, dtype_id, mspace_id, dspace_id,
+                                C_HDF5.H5P_DEFAULT, c_const_ptrTo(arr[arr.domain.low]));
+    if err < 0 then halt("HDF5 error: could not write array to dataset " + dataset);
   }
-  */
 
   /*
   proc readBasisStatesAsBlocks(filename : string, dataset : string) {
@@ -264,6 +283,116 @@ module MyHDF5 {
       readDatasetChunk(filename, dataset, offset, vectors[indices]);
     }
     return vectors;
+  }
+
+  proc writeDataset(filename : string, dataset : string, const ref arr) {
+    const file_id = openFile(filename, C_HDF5.H5F_ACC_RDWR);
+    defer C_HDF5.H5Fclose(file_id);
+    if doesObjectExist(file_id, dataset) then
+      deleteObject(file_id, dataset);
+
+    var c_shape : [0 ..# arr.rank] C_HDF5.hsize_t;
+    for i in 0 ..# arr.rank do
+      c_shape[i] = arr.dim(i).size:C_HDF5.hsize_t;
+    const mspace_id = C_HDF5.H5Screate_simple(arr.rank, c_ptrTo(c_shape), nil);
+    defer C_HDF5.H5Sclose(mspace_id);
+    const dset_id = C_HDF5.H5Dcreate2(file_id, dataset.localize().c_str(),
+                                      HDF5.getHDF5Type(arr.eltType), mspace_id,
+                                      C_HDF5.H5P_DEFAULT, C_HDF5.H5P_DEFAULT,
+                                      C_HDF5.H5P_DEFAULT);
+    defer C_HDF5.H5Dclose(dset_id);
+
+    const err = C_HDF5.H5Dwrite(dset_id, HDF5.getHDF5Type(arr.eltType), mspace_id, mspace_id,
+                                C_HDF5.H5P_DEFAULT, c_const_ptrTo(arr[arr.domain.low]));
+    if err < 0 then halt("HDF5 error: could not write array to dataset " + dataset);
+  }
+  proc writeDatasetAsBlocks(filename : string, dataset : string, const ref arr) {
+    const file_id = openFile(filename, C_HDF5.H5F_ACC_RDWR);
+    if doesObjectExist(file_id, dataset) then
+      deleteObject(file_id, dataset);
+
+    var c_shape : [0 ..# arr.rank] C_HDF5.hsize_t;
+    for i in 0 ..# arr.rank do
+      c_shape[i] = arr.dim(i).size:C_HDF5.hsize_t;
+    const mspace_id = C_HDF5.H5Screate_simple(arr.rank, c_ptrTo(c_shape), nil);
+    const dset_id = C_HDF5.H5Dcreate2(file_id, dataset.localize().c_str(),
+                                      HDF5.getHDF5Type(arr.eltType), mspace_id,
+                                      C_HDF5.H5P_DEFAULT, C_HDF5.H5P_DEFAULT,
+                                      C_HDF5.H5P_DEFAULT);
+    C_HDF5.H5Dclose(dset_id);
+    C_HDF5.H5Sclose(mspace_id);
+
+    C_HDF5.H5Fflush(file_id, C_HDF5.H5F_SCOPE_LOCAL);
+    C_HDF5.H5Fclose(file_id);
+
+    coforall loc in Locales do on loc {
+      const indices = arr.localSubdomain();
+      const offset = if arr.rank == 1 then (indices.low,) else indices.low;
+      writeDatasetChunk(filename, dataset, offset, arr[indices]);
+    }
+  }
+
+  private proc openFile(filename : string, mode) {
+    const file_id =
+      if (try! FileSystem.exists(filename)) then
+        C_HDF5.H5Fopen(filename.localize().c_str(), mode, C_HDF5.H5P_DEFAULT)
+      else
+        C_HDF5.H5Fcreate(filename.localize().c_str(), C_HDF5.H5F_ACC_EXCL,
+                         C_HDF5.H5P_DEFAULT, C_HDF5.H5P_DEFAULT);
+    if file_id < 0 then halt("HDF5 error: could not open file '" + filename + "'");
+    return file_id;
+  }
+
+  private proc openDataset(file_id : C_HDF5.hid_t, dataset : string) {
+    const dset_id = C_HDF5.H5Dopen(file_id, dataset.localize().c_str(), C_HDF5.H5P_DEFAULT);
+    if dset_id < 0 then halt("HDF5 error: could not open dataset '" + dataset + "'");
+    return dset_id;
+  }
+
+  proc deleteObject(file_id : C_HDF5.hid_t, object : string) {
+    const err = C_HDF5.H5Ldelete(file_id, object.localize().c_str(),
+                                 C_HDF5.H5P_DEFAULT);
+    if err < 0 then halt("HDF5 error: could not delete '" + object + "'");
+  }
+  proc deleteObject(filename : string, object : string) {
+    const file_id = openFile(filename, C_HDF5.H5F_ACC_RDWR);
+    defer C_HDF5.H5Fclose(file_id);
+    deleteObject(file_id, object);
+  }
+
+  proc doesObjectExist(file_id : C_HDF5.hid_t, group : string) : bool {
+    const exists = C_HDF5.H5Lexists(file_id, group.localize().c_str(),
+                                    C_HDF5.H5P_DEFAULT);
+    if exists < 0 then
+      halt("HDF5 error: could not check whether group '" + group + "' exists");
+    return exists > 0;
+  }
+  proc doesObjectExist(filename : string, group : string) : bool {
+    const file_id = openFile(filename, C_HDF5.H5F_ACC_RDONLY);
+    defer C_HDF5.H5Fclose(file_id);
+    return doesObjectExist(file_id, group);
+  }
+
+  proc makeGroup(filename : string, group : string) {
+    const file_id = openFile(filename, C_HDF5.H5F_ACC_RDWR);
+    defer C_HDF5.H5Fclose(file_id);
+    makeGroup(file_id, group);
+  }
+  proc makeGroup(file_id : C_HDF5.hid_t, group : string) {
+    if doesObjectExist(file_id, group) then
+      return;
+
+    const group_id = C_HDF5.H5Gcreate2(file_id, group.localize().c_str(),
+                                       C_HDF5.H5P_DEFAULT, C_HDF5.H5P_DEFAULT,
+                                       C_HDF5.H5P_DEFAULT);
+    if group_id < 0 then
+      halt("HDF5 error: could not create group '" + group + "'");
+    defer C_HDF5.H5Gclose(group_id);
+  }
+
+  proc makeFile(filename : string) {
+    const file_id = openFile(filename, C_HDF5.H5F_ACC_RDWR);
+    C_HDF5.H5Fclose(file_id);
   }
 
 }

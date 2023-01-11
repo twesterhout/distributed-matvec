@@ -4,8 +4,11 @@ module Diagonalize {
   use CommDiagnostics;
   import Random;
 
-  use PRIMME;
+  use BlockToHashed;
+  use HashedToBlock;
   use LatticeSymmetries;
+  use MyHDF5;
+  use PRIMME;
 
   /*
   // A buffer located on locale 0 to help with the broadcast                      
@@ -146,11 +149,12 @@ module Diagonalize {
     // const dtype = 
     type eltType = real;
     const matrix = borrowOperator(primme);
+    const ref representatives = matrix.basis.representatives();
 
     for k in 0 ..# blockSize {
       ref X = makeArrayFromPtr(_x : c_ptr(eltType) + ldx * k, (n,));
       ref Y = makeArrayFromPtr(_y : c_ptr(eltType) + ldy * k, (n,));
-      localMatrixVector(matrix, X, Y, matrix.basis.representatives());
+      localMatrixVector(matrix, X, Y, representatives);
     }
 
     _ierr.deref() = 0;
@@ -158,17 +162,21 @@ module Diagonalize {
   }
 
   config const input : string = "data/heisenberg_chain_10.yaml";
-  config const output : string = "exact_diagonalization_output.h5";
+  config const kOutput : string = "exact_diagonalization_output.h5";
   config const numEvals : int = 1;
-  config const maxBlockSize : int = 1;
-  config const eps : real = 1e-6;
+  config const kEps : real = 1e-6;
+
+  // Advanced:
+  config const kMaxBasisSize : int = 0;
+  config const kMinRestartSize : int = 0;
+  config const kMaxBlockSize : int = 1;
 
   proc configurePrimme(ref params, dimension, matrix, basisStates) {
       params.n = dimension;
       params.matrixMatvec = c_ptrTo(ls_chpl_primme_matvec);
       params.numEvals = numEvals:c_int;
       params.target = primme_smallest;
-      params.eps = eps;
+      params.eps = kEps;
 
       params.numProcs = numLocales:c_int;
       params.procID = here.id:c_int;
@@ -179,9 +187,9 @@ module Diagonalize {
       params.broadcastReal_type = primme_op_double;
 
       // params.initSize = ;
-      // params.maxBasisSize = ;
-      // params.minRestartSize = ;
-      params.maxBlockSize = maxBlockSize:c_int;
+      params.maxBasisSize = kMaxBasisSize:c_int;
+      params.minRestartSize = kMinRestartSize:c_int;
+      params.maxBlockSize = kMaxBlockSize:c_int;
 
       // params.commInfo = ;
       params.matrix = matrix.payload;
@@ -216,6 +224,37 @@ module Diagonalize {
       primme_set_method(PRIMME_DEFAULT_MIN_MATVECS, params);
   }
 
+  proc makeBasisStates(basis : Basis, out basisStates, out masks) {
+    if doesObjectExist(kOutput, "basis/representatives") {
+      logDebug("Reading representatives from '" + kOutput + "' ...");
+      const blockBasisStates =
+        readDatasetAsBlocks(kOutput, "basis/representatives", rank = 1, eltType = uint(64));
+      const tempMasks = [x in blockBasisStates] localeIdxOf(x):uint(8);
+      basisStates = arrFromBlockToHashed(blockBasisStates, tempMasks);
+      masks = tempMasks;
+    }
+    else {
+      logDebug("Generating basis states ...");
+      const tempMasks;
+      basisStates = enumerateStates(basis, tempMasks);
+      logDebug("Writing representatives to '" + kOutput + "' ...");
+      writeDatasetAsBlocks(kOutput, "basis/representatives",
+                           arrFromHashedToBlock(basisStates, tempMasks));
+      // basisStates = tempBasisStates;
+      masks = tempMasks;
+    }
+  }
+
+  proc saveEigenvectors(evals : [] real(64),
+                        evecs : BlockVector,
+                        resNorms : [] real(64),
+                        masks : [] uint(8)) {
+    writeDatasetAsBlocks(kOutput, "hamiltonian/eigenvectors",
+                         arrFromHashedToBlock(evecs, masks));
+    writeDataset(kOutput, "hamiltonian/eigenvalues", evals);
+    writeDataset(kOutput, "hamiltonian/residuals", resNorms);
+  }
+
   proc main() {
     initRuntime();
     defer deinitRuntime();
@@ -227,25 +266,37 @@ module Diagonalize {
     if numEvals < 1 then
       halt("invalid numEvals: " + numEvals:string);
 
-    if !matrix.isHermitian then
-      halt("Hamiltonian is not Hermitian");
+    // if !matrix.isHermitian then
+    //   halt("Hamiltonian is not Hermitian");
 
-    if !matrix.isReal then
-      halt("Hamiltonian is not real");
+    // if !matrix.isReal then
+    //   halt("Hamiltonian is not real");
+
+    // Create the output file
+    makeFile(kOutput);
+    makeGroup(kOutput, "basis");
+    makeGroup(kOutput, "hamiltonian");
+    makeGroup(kOutput, "observables");
 
     // Build the basis
+    const basisStates;
     const masks;
-    const basisStates = enumerateStates(basis, masks);
+    makeBasisStates(basis, basisStates, masks);
+
+    writeln(basisStates);
+    writeln(masks);
+
     const dimension = + reduce basisStates.counts;
+    logDebug("Hilbert space dimension: ", dimension);
 
     // Allocate space for eigenvectors
     var evecs = new BlockVector(real(64), numEvals, basisStates.counts);
     var evals : [0 ..# numEvals] real(64);
     var resNorms : [0 ..# numEvals] real(64);
 
+    logDebug("Diagonalizing the Hamiltonian ...");
     coforall loc in Locales with (ref evecs)
                             do on loc {
-
       const myMatrix = matrix;
       const ref myBasisStates = basisStates.getBlock(loc.id);
       myMatrix.basis.uncheckedSetRepresentatives(myBasisStates);
@@ -273,7 +324,10 @@ module Diagonalize {
       }
     }
 
-    writeln(evals);
-    writeln(resNorms);
+    logDebug("Obtained eigenvalues: ", evals);
+    logDebug("Residual norms:       ", resNorms);
+
+    saveEigenvectors(evals, evecs, resNorms, masks);
+
   }
 }

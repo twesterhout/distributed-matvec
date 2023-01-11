@@ -17,14 +17,14 @@ PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -llapacke -lopenblas -lm -l
 
 ifeq ($(UNAME), Linux)
   HDF5_CFLAGS = $(shell pkg-config --cflags hdf5)
-  HDF5_LIBS = -lhdf5_hl $(shell pkg-config --libs hdf5)
+  HDF5_LDFLAGS = -lhdf5_hl $(shell pkg-config --libs hdf5)
   CONDA_CC ?= $(shell conda run -n ci_devel bash -c "which \$${CC}")
   CONDA_PREFIX ?= $(shell conda run -n ci_devel bash -c "echo \$${CONDA_PREFIX}")
   SHARED_EXT = so
   SHARED_FLAG = -shared -rdynamic
 else
   HDF5_CFLAGS =
-  HDF5_LIBS = -lhdf5_hl -lhdf5
+  HDF5_LDFLAGS = -lhdf5_hl -lhdf5
   CONDA_CC = $(CC)
   CONDA_PREFIX = 
   SHARED_EXT = dylib
@@ -74,9 +74,9 @@ check: check-states-enumeration check-matrix-vector-product
 
 .PHONY: benchmark-states-enumeration
 benchmark-states-enumeration: bin/TestStatesEnumeration
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/large-scale/construction/heisenberg_pyrochlore_2x2x2.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/large-scale/construction/heisenberg_kagome_36.h5
-	$(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_square_6x6.yaml --kRepresentatives data/large-scale/construction/heisenberg_square_6x6.h5
+	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_pyrochlore_2x2x2.yaml --kRepresentatives data/large-scale/construction/heisenberg_pyrochlore_2x2x2.h5
+	# $(CHPL_LIBS) $< $(CHPL_ARGS) --kBasis data/heisenberg_kagome_36.yaml --kRepresentatives data/large-scale/construction/heisenberg_kagome_36.h5
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_square_6x6.yaml --kRepresentatives data/large-scale/construction/heisenberg_square_6x6.h5
 
 .PHONY: check-states-enumeration
 check-states-enumeration: bin/TestStatesEnumeration
@@ -173,31 +173,31 @@ endif
 
 bin/TestStatesEnumeration: test/TestStatesEnumeration.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LDFLAGS) $(LDFLAGS)
 
 bin/TestMatrixVectorProduct: test/TestMatrixVectorProduct.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LDFLAGS) $(LDFLAGS)
 
 bin/Example01: example/Example01.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LDFLAGS) $(LDFLAGS)
 
 bin/Example02: example/Example02.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LDFLAGS) $(LDFLAGS)
 
 bin/Example03: example/Example03.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LDFLAGS) $(LDFLAGS)
 
 bin/Example04: example/Example04.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LDFLAGS) $(LDFLAGS)
 
 bin/Example05: example/Example05.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LIBS) $(LDFLAGS) 
+	chpl $(CFLAGS) $(HDF5_CFLAGS) -o $@ --main-module $(@F) $^ $(HDF5_LDFLAGS) $(LDFLAGS)
 
 bin/dummy: src/dummy.chpl
 	@mkdir -p $(@D)
@@ -209,7 +209,10 @@ bin/primme: src/PRIMME.chpl
 
 bin/Diagonalize: src/Diagonalize.chpl src/PRIMME.chpl $(APP_MODULES)
 	@mkdir -p $(@D)
-	chpl $(CFLAGS) $(PRIMME_CFLAGS) -o $@ --main-module $(@F) $^ $(LDFLAGS) $(PRIMME_LDFLAGS)
+	chpl $(CFLAGS) $(HDF5_CFLAGS) $(PRIMME_CFLAGS) -o $@ --main-module $(@F) $^ \
+		$(PRIMME_LDFLAGS) \
+		$(HDF5_LDFLAGS) \
+		$(LDFLAGS)
 
 # Dummy file we use to reproduce internal compiler errors in Chapel for
 # submitting issues.
