@@ -82,27 +82,44 @@ private proc localProcess(basisPtr : c_ptr(Basis), accessorPtr : c_ptr(Concurren
     // when the size of indices is 0.
     if size == 0 then return (0, 0, 0, 0);
 
-    allocateTimer.start();
-    var indices : [0 ..# size] int = noinit;
-    allocateTimer.stop();
-
-    indexingTimer.start();
-    ls_hs_state_index(basisPtr.deref().payload, size, basisStates, 1, c_ptrTo(indices[0]), 1);
-    indexingTimer.stop();
-
-    accessTimer.start();
-    ref accessor = accessorPtr.deref();
-    foreach k in 0 ..# size {
-      const i = indices[k];
-      const c = coeffs[k]:coeffType;
-      // Importantly, the user could have made a mistake and given us an
-      // operator which does not respect the basis symmetries. Then we could
-      // have that a |σ⟩ was generated that doesn't belong to our basis. In
-      // this case, we should throw an error.
-      if i >= 0 then accessor.localAdd(i, c);
-                else halt("invalid index");
+    // Special case when we don't have to call ls_hs_state_index
+    if basisPtr.deref().isStateIndexIdentity() {
+      accessTimer.start();
+      ref accessor = accessorPtr.deref();
+      foreach k in 0 ..# size {
+        const i = basisStates[k]:int;
+        const c = coeffs[k]:coeffType;
+        accessor.localAdd(i, c);
+      }
+      accessTimer.stop();
     }
-    accessTimer.stop();
+    else {
+      allocateTimer.start();
+      var indices : [0 ..# size] int = noinit;
+      allocateTimer.stop();
+
+      indexingTimer.start();
+      ls_hs_state_index(basisPtr.deref().payload, size, basisStates, 1, c_ptrTo(indices[0]), 1);
+      indexingTimer.stop();
+
+      accessTimer.start();
+      ref accessor = accessorPtr.deref();
+      foreach k in 0 ..# size {
+        const i = indices[k];
+        const c = coeffs[k]:coeffType;
+        if c != 0 {
+          // Importantly, the user could have made a mistake and given us an
+          // operator which does not respect the basis symmetries. Then we could
+          // have that a |σ⟩ was generated that doesn't belong to our basis. In
+          // this case, we should throw an error.
+          if i >= 0 then accessor.localAdd(i, c);
+                    else halt("invalid index: " + i:string +
+                              " for state " + basisStates[k]:string +
+                              " with coeff " + c:string);
+        }
+      }
+      accessTimer.stop();
+    }
   }
   timer.stop();
   return (timer.elapsed(), allocateTimer.elapsed(),

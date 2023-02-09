@@ -1,6 +1,6 @@
 basis:
   number_spins: 12
-  hamming_weight: 6
+  hamming_weight: null
   symmetries: []
 hamiltonian:
   name: "Heisenberg Hamiltonian"

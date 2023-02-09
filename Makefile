@@ -103,6 +103,7 @@ benchmark-matrix-vector-product: bin/TestMatrixVectorProduct
 
 .PHONY: check-matrix-vector-product
 check-matrix-vector-product: bin/TestMatrixVectorProduct
+	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/issue_01.yaml --kVectors data/matvec/issue_01.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_4.yaml --kVectors data/matvec/heisenberg_chain_4.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_6.yaml --kVectors data/matvec/heisenberg_chain_6.h5
 	$(CHPL_LIBS) $< $(CHPL_ARGS) --kHamiltonian data/heisenberg_chain_8.yaml --kVectors data/matvec/heisenberg_chain_8.h5
