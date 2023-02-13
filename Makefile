@@ -1,35 +1,50 @@
 .RULES:
 .POSIX:
 
-UNAME = $(shell uname)
 OPTIMIZATION ?= --debug
 COMPILER ?= llvm
-CFLAGS = -Ithird_party/include $(OPTIMIZATION) --target-compiler=$(COMPILER)
-LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell
+LS_HS_PATH = $(PWD)/lattice-symmetries-haskell
+PRIMME_PATH = /home/tom/src/primme
+
+SUDO = sudo
+UNAME = $(shell uname)
+CFLAGS = $(OPTIMIZATION) --target-compiler=$(COMPILER)
+# LDFLAGS += -Lthird_party/lib -llattice_symmetries_haskell
 # -llattice_symmetries_core
 # ifeq ($(UNAME), Linux)
 #   LDFLAGS += -lnuma
 # endif
 
-PRIMME_CFLAGS = -I/home/tom/src/primme/include
-PRIMME_LDFLAGS = -L/home/tom/src/primme/lib -lprimme -llapacke -lopenblas -lm -lgomp -lpthread
+LS_HS_CFLAGS = -I$(LS_HS_PATH)/include
+LS_HS_LDFLAGS = -L$(LS_HS_PATH)/lib -llattice_symmetries_haskell
 
+PRIMME_CFLAGS = -I$(PRIMME_PATH)/include
+PRIMME_LDFLAGS = -L$(PRIMME_PATH)/lib -lprimme -llapacke -lopenblas -lm -lgomp -lpthread
 
 ifeq ($(UNAME), Linux)
   HDF5_CFLAGS = $(shell pkg-config --cflags hdf5)
   HDF5_LDFLAGS = -lhdf5_hl $(shell pkg-config --libs hdf5)
-  CONDA_CC ?= $(shell conda run -n ci_devel bash -c "which \$${CC}")
-  CONDA_PREFIX ?= $(shell conda run -n ci_devel bash -c "echo \$${CONDA_PREFIX}")
+  # CONDA_CC ?= $(shell conda run -n ci_devel bash -c "which \$${CC}")
+  # CONDA_PREFIX ?= $(shell conda run -n ci_devel bash -c "echo \$${CONDA_PREFIX}")
   SHARED_EXT = so
-  SHARED_FLAG = -shared -rdynamic
+  # SHARED_FLAG = -shared -rdynamic
 else
   HDF5_CFLAGS =
   HDF5_LDFLAGS = -lhdf5_hl -lhdf5
-  CONDA_CC = $(CC)
-  CONDA_PREFIX = 
+  # CONDA_CC = $(CC)
+  # CONDA_PREFIX = 
   SHARED_EXT = dylib
-  SHARED_FLAG = -dynamiclib
+  # SHARED_FLAG = -dynamiclib
 endif
+
+# ifeq ($(UNAME), Linux)
+#   CHPL_LIBS = LD_LIBRARY_PATH=$(PWD)/third_party/lib:$$LD_LIBRARY_PATH
+# endif
+# ifeq ($(UNAME), Darwin)
+#   CHPL_LIBS = DYLD_LIBRARY_PATH=$(PWD)/third_party/lib:$$DYLD_LIBRARY_PATH
+# endif
+# CHPL_ARGS =
+
 
 PREFIX = $(PWD)
 PACKAGE = lattice-symmetries-chapel
@@ -48,26 +63,18 @@ LIB_MODULES = src/LatticeSymmetries.chpl \
               src/CommonParameters.chpl
 
 APP_MODULES = $(LIB_MODULES) \
-	      src/HashedToBlock.chpl \
-	      src/BlockToHashed.chpl \
-	      src/MyHDF5.chpl
+              src/HashedToBlock.chpl \
+              src/BlockToHashed.chpl \
+              src/MyHDF5.chpl
 
 .PHONY: all
 all: examples
 
-ifeq ($(UNAME), Linux)
-  CHPL_LIBS = LD_LIBRARY_PATH=$(PWD)/third_party/lib:$$LD_LIBRARY_PATH
-endif
-ifeq ($(UNAME), Darwin)
-  CHPL_LIBS = DYLD_LIBRARY_PATH=$(PWD)/third_party/lib:$$DYLD_LIBRARY_PATH
-endif
-CHPL_ARGS =
-
 .PHONY: examples
 examples: bin/Example02 bin/Example05
 
-.PHONY: test
-test: bin/TestStatesEnumeration bin/TestMatrixVectorProduct
+# .PHONY: test
+# test: bin/TestStatesEnumeration bin/TestMatrixVectorProduct
 
 .PHONY: check
 check: check-states-enumeration check-matrix-vector-product
@@ -142,14 +149,39 @@ lib: lib/liblattice_symmetries_chapel.$(SHARED_EXT)
 
 lib/liblattice_symmetries_chapel.$(SHARED_EXT): $(LIB_MODULES) src/library.c
 	@mkdir -p $(@D)
-ifeq ($(UNAME), Darwin)
-	chpl $(CFLAGS) --library --dynamic -o lattice_symmetries_chapel $^ $(LDFLAGS)
-	# install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
-else
-	chpl $(CFLAGS) --library --static -o lattice_symmetries_chapel $(LIB_MODULES) $(LDFLAGS)
-	$(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c lib/liblattice_symmetries_chapel.a `$$CHPL_HOME/util/config/compileline --libraries` $(LDFLAGS)
-	rm lib/liblattice_symmetries_chapel.a
+	@rm -rf $(@D)/*
+	chpl $(CFLAGS) $(LS_HS_CFLAGS) --library --dynamic -o lattice_symmetries_chapel $^ $(LS_HS_LDFLAGS) $(LDFLAGS)
+
+.PHONY: bundle
+bundle: lib
+	mkdir -p $@
+	cp -v -r $(LS_HS_PATH)/* $@/
+	install -m644 -C lib/liblattice_symmetries_chapel.$(SHARED_EXT) $@/lib/
+ifeq ($(UNAME), Linux)
+	patchelf --set-rpath '$$ORIGIN' $@/lib/liblattice_symmetries_chapel.$(SHARED_EXT)
 endif
+
+.PHONY: bundle-docker
+bundle-docker: 
+	mkdir -p $@
+	WORKDIR=/work/distributed-matvec && \
+	docker run --rm \
+	  -v $$PWD/src:$$WORKDIR/src:ro \
+	  -v $$PWD/Makefile:$$WORKDIR/Makefile:ro \
+	  -v $(LS_HS_PATH):$$WORKDIR/lattice-symmetries-haskell:ro \
+	  -v $$PWD/$@:$$WORKDIR/bundle:z \
+	  twesterhout/haskell-chapel-halide \
+	  bash -c 'cd /work/distributed-matvec && make PATH=/opt/chapel/bin:$$PATH OPTIMIZATION=--fast bundle'
+	$(SUDO) chown -R $$USER:$$USER $@
+
+
+# ifeq ($(UNAME), Darwin)
+# 	# install_name_tool -id lib/liblattice_symmetries_chapel.$(SHARED_EXT) lib/liblattice_symmetries_core.$(SHARED_EXT)
+# else
+# 	# chpl $(CFLAGS) --library --static -o lattice_symmetries_chapel $(LIB_MODULES) $(LDFLAGS)
+# 	# $(CONDA_CC) $(SHARED_FLAG) -o lib/liblattice_symmetries_chapel.$(SHARED_EXT) src/library.c lib/liblattice_symmetries_chapel.a `$$CHPL_HOME/util/config/compileline --libraries` $(LDFLAGS)
+# 	# rm lib/liblattice_symmetries_chapel.a
+# endif
 
 .PHONY: release
 release: lib
